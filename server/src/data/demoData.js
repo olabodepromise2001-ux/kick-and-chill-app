@@ -1,0 +1,108 @@
+const now = new Date().toISOString();
+
+export const demoData = {
+  tournaments: [
+    {
+      id: "tournament-1",
+      name: "Kick and Chill Hub Saturday League",
+      format: "round_robin",
+      venue: "Main Pitch",
+      createdAt: now,
+    },
+    {
+      id: "tournament-2",
+      name: "Evening Knockout Clash",
+      format: "knockout",
+      venue: "Floodlit Arena",
+      createdAt: now,
+    },
+  ],
+  teams: [
+    { id: "team-1", tournamentId: "tournament-1", name: "Lagos Falcons" },
+    { id: "team-2", tournamentId: "tournament-1", name: "Yaba Tigers" },
+    { id: "team-3", tournamentId: "tournament-1", name: "Island Rangers" },
+    { id: "team-4", tournamentId: "tournament-1", name: "Lekki United" },
+    { id: "team-5", tournamentId: "tournament-2", name: "Surulere Strikers" },
+    { id: "team-6", tournamentId: "tournament-2", name: "Mainland Ballers" },
+    { id: "team-7", tournamentId: "tournament-2", name: "Ajah Warriors" },
+    { id: "team-8", tournamentId: "tournament-2", name: "Victoria FC" }
+  ],
+  players: [
+    { id: "player-1", teamId: "team-1", name: "Tobi Cole" },
+    { id: "player-2", teamId: "team-1", name: "Femi Ade" },
+    { id: "player-3", teamId: "team-2", name: "Jay Bello" },
+    { id: "player-4", teamId: "team-3", name: "Seyi Prince" },
+    { id: "player-5", teamId: "team-4", name: "Musa Kay" },
+    { id: "player-6", teamId: "team-5", name: "Ikenna Obi" },
+    { id: "player-7", teamId: "team-6", name: "Ade Sparks" },
+    { id: "player-8", teamId: "team-7", name: "Chuka M" },
+    { id: "player-9", teamId: "team-8", name: "Tunde Fox" }
+  ],
+  matches: [
+    {
+      id: "match-1",
+      tournamentId: "tournament-1",
+      stage: "Matchday 1",
+      homeTeamId: "team-1",
+      awayTeamId: "team-2",
+      homeScore: 2,
+      awayScore: 1,
+      status: "finished",
+      scheduledAt: now,
+    },
+    {
+      id: "match-2",
+      tournamentId: "tournament-1",
+      stage: "Matchday 1",
+      homeTeamId: "team-3",
+      awayTeamId: "team-4",
+      homeScore: 2,
+      awayScore: 2,
+      status: "finished",
+      scheduledAt: now,
+    },
+    {
+      id: "match-3",
+      tournamentId: "tournament-1",
+      stage: "Matchday 2",
+      homeTeamId: "team-1",
+      awayTeamId: "team-3",
+      homeScore: 1,
+      awayScore: 0,
+      status: "live",
+      scheduledAt: now,
+    },
+    {
+      id: "match-4",
+      tournamentId: "tournament-2",
+      stage: "Semifinal",
+      homeTeamId: "team-5",
+      awayTeamId: "team-6",
+      homeScore: 0,
+      awayScore: 0,
+      status: "upcoming",
+      scheduledAt: now,
+    },
+    {
+      id: "match-5",
+      tournamentId: "tournament-2",
+      stage: "Semifinal",
+      homeTeamId: "team-7",
+      awayTeamId: "team-8",
+      homeScore: 0,
+      awayScore: 0,
+      status: "upcoming",
+      scheduledAt: now,
+    }
+  ],
+  goals: [
+    { id: "goal-1", matchId: "match-1", playerId: "player-1", teamId: "team-1", minute: 4 },
+    { id: "goal-2", matchId: "match-1", playerId: "player-2", teamId: "team-1", minute: 11 },
+    { id: "goal-3", matchId: "match-1", playerId: "player-3", teamId: "team-2", minute: 14 },
+    { id: "goal-4", matchId: "match-2", playerId: "player-4", teamId: "team-3", minute: 7 },
+    { id: "goal-5", matchId: "match-2", playerId: "player-5", teamId: "team-4", minute: 8 },
+    { id: "goal-6", matchId: "match-2", playerId: "player-4", teamId: "team-3", minute: 16 },
+    { id: "goal-7", matchId: "match-2", playerId: "player-5", teamId: "team-4", minute: 18 },
+    { id: "goal-8", matchId: "match-3", playerId: "player-1", teamId: "team-1", minute: 6 }
+  ],
+};

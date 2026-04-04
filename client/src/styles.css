@@ -1,0 +1,301 @@
+:root {
+  color-scheme: dark;
+  --bg: #08131f;
+  --panel: rgba(10, 20, 33, 0.88);
+  --line: rgba(173, 198, 255, 0.12);
+  --text: #eef5ff;
+  --muted: #9eb3ca;
+  --accent: #7ef07a;
+  --accent-strong: #d5ff72;
+  --shadow: 0 18px 40px rgba(0, 0, 0, 0.22);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html {
+  scroll-behavior: smooth;
+}
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  font-family: "Segoe UI", Tahoma, Geneva, Verdana, sans-serif;
+  color: var(--text);
+  background:
+    radial-gradient(circle at top, rgba(126, 240, 122, 0.15), transparent 26%),
+    linear-gradient(180deg, #06101a 0%, #0a1726 100%);
+}
+
+button,
+input,
+select,
+textarea {
+  font: inherit;
+}
+
+button {
+  border: 0;
+  border-radius: 14px;
+  padding: 0.9rem 1rem;
+  background: linear-gradient(135deg, var(--accent-strong), var(--accent));
+  color: #07111b;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+button:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+input,
+select,
+textarea {
+  width: 100%;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  padding: 0.9rem 1rem;
+  background: rgba(255, 255, 255, 0.03);
+  color: var(--text);
+}
+
+a {
+  color: inherit;
+  text-decoration: none;
+}
+
+.loading-screen {
+  min-height: 100vh;
+  display: grid;
+  place-items: center;
+}
+
+.app-shell {
+  width: min(1200px, calc(100vw - 24px));
+  margin: 0 auto;
+  padding: 1rem 0 3rem;
+}
+
+.hero,
+.panel,
+.card,
+.toast {
+  border: 1px solid var(--line);
+  background: var(--panel);
+  border-radius: 24px;
+  box-shadow: var(--shadow);
+}
+
+.hero {
+  display: grid;
+  gap: 1rem;
+  padding: 1.4rem;
+  background:
+    linear-gradient(135deg, rgba(12, 22, 37, 0.95), rgba(16, 36, 61, 0.88)),
+    radial-gradient(circle at right, rgba(213, 255, 114, 0.18), transparent 28%);
+}
+
+.eyebrow {
+  margin: 0 0 0.4rem;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  font-size: 0.72rem;
+}
+
+.hero h1,
+.panel h2,
+.card h3 {
+  margin: 0;
+}
+
+.hero-copy {
+  max-width: 60ch;
+  color: #d0dbec;
+}
+
+.nav-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+}
+
+.nav-list a {
+  padding: 0.7rem 1rem;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.layout {
+  display: grid;
+  gap: 1rem;
+  margin-top: 1rem;
+}
+
+.panel {
+  padding: 1rem;
+}
+
+.panel-heading {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+  align-items: center;
+  margin-bottom: 1rem;
+}
+
+.home-panel select {
+  max-width: 320px;
+}
+
+.hero-stats,
+.form-grid,
+.list-grid,
+.scorer-grid {
+  display: grid;
+  gap: 1rem;
+}
+
+.hero-stats {
+  grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+}
+
+.hero-stats article {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.5rem;
+  padding: 1rem;
+  border-radius: 18px;
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.hero-stats span,
+.badge-row {
+  color: var(--muted);
+}
+
+.form-grid {
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+}
+
+.card {
+  padding: 1rem;
+}
+
+.form-card,
+.fixture-card,
+.tournament-card {
+  display: grid;
+  gap: 0.75rem;
+}
+
+.badge-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+  font-size: 0.92rem;
+}
+
+.status-badge {
+  padding: 0.35rem 0.7rem;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.06);
+  text-transform: capitalize;
+}
+
+.status-badge.live {
+  color: #06111b;
+  background: #ffcf63;
+}
+
+.status-badge.done {
+  color: #07111b;
+  background: var(--accent);
+}
+
+.tournament-card.active {
+  outline: 2px solid rgba(126, 240, 122, 0.5);
+}
+
+.fixture-score,
+.goals-total {
+  font-size: 2rem;
+  font-weight: 800;
+}
+
+.scorer-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.scorer-list span {
+  padding: 0.35rem 0.6rem;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.05);
+  font-size: 0.9rem;
+}
+
+.player-help {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.45rem;
+  font-size: 0.82rem;
+  color: var(--muted);
+}
+
+.player-help span {
+  padding: 0.3rem 0.55rem;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.result-editor {
+  display: grid;
+  gap: 0.65rem;
+}
+
+.table-wrap {
+  overflow-x: auto;
+}
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+  min-width: 640px;
+}
+
+th,
+td {
+  padding: 0.85rem 0.75rem;
+  text-align: left;
+  border-bottom: 1px solid var(--line);
+}
+
+.scorer-card {
+  text-align: center;
+}
+
+.toast {
+  margin-top: 1rem;
+  padding: 0.9rem 1rem;
+  color: var(--accent);
+}
+
+@media (min-width: 900px) {
+  .layout {
+    grid-template-columns: 1.1fr 1.1fr;
+  }
+
+  .home-panel,
+  .admin-panel,
+  #fixtures,
+  #standings,
+  #top-scorers {
+    grid-column: 1 / -1;
+  }
+}
