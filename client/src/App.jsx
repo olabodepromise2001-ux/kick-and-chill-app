@@ -28,12 +28,22 @@ const PUBLIC_TABS = [
   { id: "top-scorers", label: "Top Scorers" },
 ];
 
+const WORLD_CUP_GROUP_LETTERS = ["A", "B", "C", "D", "E", "F", "G", "H"];
+const WORLD_CUP_WIZARD_STEPS = {
+  CREATE_TOURNAMENT: 1,
+  CREATE_GROUPS: 2,
+  ASSIGN_TEAMS: 3,
+  CREATE_FIXTURES: 4,
+  DASHBOARD: 5,
+};
+
 const ADMIN_PASSWORD_KEY = "kick-and-chill-admin-password";
 
 const initialTournamentForm = {
   name: "",
   format: "round_robin",
   venue: "",
+  groupCount: "8",
 };
 
 const initialTeamForm = {
@@ -53,6 +63,13 @@ const initialFixtureForm = {
   homeTeamId: "",
   awayTeamId: "",
   scheduledAt: "",
+};
+
+const initialWorldCupWizard = {
+  active: false,
+  tournamentId: "",
+  step: WORLD_CUP_WIZARD_STEPS.CREATE_TOURNAMENT,
+  groupCount: "8",
 };
 
 function getStatusTone(status) {
@@ -94,6 +111,16 @@ function createFixtureDraft(match) {
     awayTeamId: match.awayTeamId,
     scheduledAt: toDateTimeLocalValue(match.scheduledAt),
   };
+}
+
+function getWorldCupWizardStepLabel(step) {
+  return {
+    [WORLD_CUP_WIZARD_STEPS.CREATE_TOURNAMENT]: "Create Tournament",
+    [WORLD_CUP_WIZARD_STEPS.CREATE_GROUPS]: "Create Groups",
+    [WORLD_CUP_WIZARD_STEPS.ASSIGN_TEAMS]: "Assign Teams",
+    [WORLD_CUP_WIZARD_STEPS.CREATE_FIXTURES]: "Fixture Creation",
+    [WORLD_CUP_WIZARD_STEPS.DASHBOARD]: "Dashboard",
+  }[step] || "World Cup Setup";
 }
 
 function formatTournamentFormat(format) {
@@ -370,7 +397,7 @@ function OverviewPanel({ selectedTournament, tournaments, selectedTournamentId, 
           {selectedTournament.format === "world_cup" ? (
             <article>
               <span>Groups</span>
-              <strong>{selectedTournament.groupStandings.length}</strong>
+              <strong>{selectedTournament.groups?.length || selectedTournament.groupStandings.length}</strong>
             </article>
           ) : null}
         </div>
@@ -399,7 +426,7 @@ function TournamentsPanel({ tournaments, selectedTournament, onSelect }) {
             <h3>{tournament.name}</h3>
             <p>
               {tournament.teams.length} teams
-              {tournament.format === "world_cup" ? ` - ${tournament.groupStandings.length} groups` : ""}
+              {tournament.format === "world_cup" ? ` - ${tournament.groups?.length || tournament.groupStandings.length} groups` : ""}
             </p>
             <button type="button" onClick={() => onSelect(tournament.id)}>
               View
@@ -608,11 +635,13 @@ function AdminDashboard({
   setFixtureForm,
   fixtureEditorForms,
   setFixtureEditorForms,
+  worldCupWizard,
   resultForms,
   setResultForms,
   adminPassword,
   onCreateTournament,
   onCreateGroup,
+  onAdvanceWorldCupWizard,
   onAddTeam,
   onCreateFixture,
   onGenerateWorldCupKnockout,
@@ -646,6 +675,10 @@ function AdminDashboard({
   const fixtureGroupTeams = selectedTournament?.format === "world_cup" && fixtureForm.phase === "group"
     ? selectedTournament.teams.filter((team) => team.groupId === fixtureForm.groupId)
     : selectedTournament?.teams || [];
+  const isWorldCupWizardActive = selectedTournament?.format === "world_cup"
+    && worldCupWizard.active
+    && worldCupWizard.tournamentId === selectedTournament.id;
+  const worldCupStep = isWorldCupWizardActive ? worldCupWizard.step : WORLD_CUP_WIZARD_STEPS.DASHBOARD;
 
   return (
     <>
@@ -675,6 +708,35 @@ function AdminDashboard({
       {message ? <div className="toast">{message}</div> : null}
 
       <main className="layout">
+        {isWorldCupWizardActive ? (
+          <section className="panel">
+            <div className="panel-heading">
+              <div>
+                <p className="eyebrow">World Cup Wizard</p>
+                <h2>{getWorldCupWizardStepLabel(worldCupStep)}</h2>
+              </div>
+            </div>
+            <div className="hero-stats">
+              <article>
+                <span>Step</span>
+                <strong>{worldCupStep} / 5</strong>
+              </article>
+              <article>
+                <span>Tournament</span>
+                <strong>{selectedTournament?.name}</strong>
+              </article>
+              <article>
+                <span>Groups</span>
+                <strong>{selectedTournament?.groups?.length || 0}</strong>
+              </article>
+              <article>
+                <span>Teams</span>
+                <strong>{selectedTournament?.teams?.length || 0}</strong>
+              </article>
+            </div>
+          </section>
+        ) : null}
+
         <section className="panel home-panel" id="admin-home">
           <div className="panel-heading">
             <div>
@@ -735,6 +797,17 @@ function AdminDashboard({
                 <option value="knockout">Knockout</option>
                 <option value="world_cup">World Cup</option>
               </select>
+              {tournamentForm.format === "world_cup" ? (
+                <input
+                  type="number"
+                  min="1"
+                  max={WORLD_CUP_GROUP_LETTERS.length}
+                  placeholder="Number of groups"
+                  value={tournamentForm.groupCount}
+                  onChange={(event) => setTournamentForm((current) => ({ ...current, groupCount: event.target.value }))}
+                  required
+                />
+              ) : null}
               <input
                 placeholder="Venue"
                 value={tournamentForm.venue}
@@ -743,23 +816,32 @@ function AdminDashboard({
               <button type="submit">Create</button>
             </form>
 
-            {selectedTournament?.format === "world_cup" ? (
+            {selectedTournament?.format === "world_cup" && worldCupStep === WORLD_CUP_WIZARD_STEPS.CREATE_GROUPS ? (
               <form className="card form-card" onSubmit={onCreateGroup}>
-                <h3>Create Group</h3>
+                <h3>Create Groups</h3>
                 <input
-                  placeholder="Group letter (A-H)"
-                  maxLength="1"
-                  value={groupForm.name}
-                  onChange={(event) => setGroupForm({ name: event.target.value.toUpperCase() })}
-                  required
+                  type="number"
+                  min="1"
+                  max={WORLD_CUP_GROUP_LETTERS.length}
+                  value={worldCupWizard.groupCount}
+                  onChange={(event) => setGroupForm({ name: event.target.value })}
+                  disabled
                 />
+                <p>Groups A to {WORLD_CUP_GROUP_LETTERS[Math.max(0, Number(worldCupWizard.groupCount || 1) - 1)] || "A"} will be created automatically.</p>
                 <button type="submit" disabled={!selectedTournament}>
-                  Add Group
+                  Generate Groups
+                </button>
+                <button type="button" className="ghost-button" onClick={() => onAdvanceWorldCupWizard(WORLD_CUP_WIZARD_STEPS.ASSIGN_TEAMS)}>
+                  Skip To Team Assignment
                 </button>
               </form>
             ) : null}
 
-            <form className="card form-card" onSubmit={onAddTeam}>
+            <form
+              className="card form-card"
+              onSubmit={onAddTeam}
+              style={selectedTournament?.format === "world_cup" && worldCupStep !== WORLD_CUP_WIZARD_STEPS.ASSIGN_TEAMS ? { opacity: 0.6 } : undefined}
+            >
               <h3>Add Team</h3>
               <input
                 placeholder="Team name"
@@ -792,10 +874,19 @@ function AdminDashboard({
               ) : null}
               <button
                 type="submit"
-                disabled={!selectedTournament || (selectedTournament?.format === "world_cup" && !(selectedTournament.groups || []).length)}
+                disabled={
+                  !selectedTournament ||
+                  (selectedTournament?.format === "world_cup" && !(selectedTournament.groups || []).length) ||
+                  (selectedTournament?.format === "world_cup" && worldCupStep !== WORLD_CUP_WIZARD_STEPS.ASSIGN_TEAMS)
+                }
               >
                 Add Team
               </button>
+              {selectedTournament?.format === "world_cup" && worldCupStep === WORLD_CUP_WIZARD_STEPS.ASSIGN_TEAMS ? (
+                <button type="button" className="ghost-button" onClick={() => onAdvanceWorldCupWizard(WORLD_CUP_WIZARD_STEPS.CREATE_FIXTURES)}>
+                  Continue To Fixtures
+                </button>
+              ) : null}
             </form>
 
             <div className="card form-card">
@@ -826,11 +917,16 @@ function AdminDashboard({
                   Generate Round of 16 From Standings
                 </button>
               ) : null}
+              {selectedTournament?.format === "world_cup" && worldCupStep === WORLD_CUP_WIZARD_STEPS.CREATE_FIXTURES ? (
+                <button type="button" className="ghost-button" onClick={() => onAdvanceWorldCupWizard(WORLD_CUP_WIZARD_STEPS.DASHBOARD)}>
+                  Continue To Dashboard
+                </button>
+              ) : null}
             </div>
           </div>
         </section>
 
-        {selectedTournament?.format === "world_cup" ? (
+        {selectedTournament?.format === "world_cup" && worldCupStep >= WORLD_CUP_WIZARD_STEPS.CREATE_GROUPS ? (
           <section className="panel">
             <div className="panel-heading">
               <div>
@@ -866,7 +962,10 @@ function AdminDashboard({
           </section>
         ) : null}
 
-        <section className="panel">
+        <section
+          className="panel"
+          style={selectedTournament?.format === "world_cup" && worldCupStep < WORLD_CUP_WIZARD_STEPS.CREATE_FIXTURES ? { opacity: 0.6 } : undefined}
+        >
           <div className="panel-heading">
             <div>
               <p className="eyebrow">Fixture Control</p>
@@ -947,8 +1046,14 @@ function AdminDashboard({
                 onChange={(event) => setFixtureForm((current) => ({ ...current, scheduledAt: event.target.value }))}
                 required
               />
-              <button type="submit" disabled={!selectedTournament}>
-                Create Fixture
+              <button
+                type="submit"
+                disabled={
+                  !selectedTournament ||
+                  (selectedTournament?.format === "world_cup" && worldCupStep !== WORLD_CUP_WIZARD_STEPS.CREATE_FIXTURES)
+                }
+              >
+                {selectedTournament?.format === "world_cup" && worldCupStep !== WORLD_CUP_WIZARD_STEPS.CREATE_FIXTURES ? "Complete Previous Steps First" : "Create Fixture"}
               </button>
             </form>
           </div>
@@ -1099,6 +1204,7 @@ function App() {
   const [teamForm, setTeamForm] = useState(initialTeamForm);
   const [fixtureForm, setFixtureForm] = useState(initialFixtureForm);
   const [fixtureEditorForms, setFixtureEditorForms] = useState({});
+  const [worldCupWizard, setWorldCupWizard] = useState(initialWorldCupWizard);
   const [resultForms, setResultForms] = useState({});
   const [message, setMessage] = useState("");
   const [toastMessage, setToastMessage] = useState("");
@@ -1235,7 +1341,16 @@ function App() {
     window.localStorage.removeItem(ADMIN_PASSWORD_KEY);
     setAdminPassword("");
     setMessage("Logged out.");
+    setWorldCupWizard(initialWorldCupWizard);
     navigateTo("/admin/login");
+  }
+
+  function advanceWorldCupWizard(step) {
+    setWorldCupWizard((current) => ({
+      ...current,
+      active: true,
+      step,
+    }));
   }
 
   async function handleTournamentSubmit(event) {
@@ -1243,7 +1358,18 @@ function App() {
     const tournament = await createTournament(tournamentForm, adminPassword);
     setTournamentForm(initialTournamentForm);
     setSelectedTournamentId(tournament.id);
-    setMessage("Tournament created.");
+    if (tournament.format === "world_cup") {
+      setWorldCupWizard({
+        active: true,
+        tournamentId: tournament.id,
+        step: WORLD_CUP_WIZARD_STEPS.CREATE_GROUPS,
+        groupCount: tournamentForm.groupCount,
+      });
+      setMessage("Tournament created. Continue with group creation.");
+    } else {
+      setWorldCupWizard(initialWorldCupWizard);
+      setMessage("Tournament created.");
+    }
     await loadData({ force: true });
   }
 
@@ -1265,7 +1391,7 @@ function App() {
     );
 
     setTeamForm(initialTeamForm);
-    setMessage("Team added.");
+    setMessage(selectedTournament.format === "world_cup" ? "Team assigned to group." : "Team added.");
     await loadData({ force: true });
   }
 
@@ -1276,14 +1402,23 @@ function App() {
       return;
     }
 
-    await createGroup(
-      selectedTournament.id,
-      { name: groupForm.name.trim() },
-      adminPassword,
-    );
+    const requestedCount = Number(worldCupWizard.groupCount || tournamentForm.groupCount || 0);
+    const existingNames = new Set((selectedTournament.groups || []).map((group) => group.name));
+    const groupNames = WORLD_CUP_GROUP_LETTERS.slice(0, requestedCount);
+
+    for (const name of groupNames) {
+      if (!existingNames.has(name)) {
+        await createGroup(
+          selectedTournament.id,
+          { name },
+          adminPassword,
+        );
+      }
+    }
 
     setGroupForm(initialGroupForm);
-    setMessage("Group created.");
+    advanceWorldCupWizard(WORLD_CUP_WIZARD_STEPS.ASSIGN_TEAMS);
+    setMessage("Groups created. Assign teams to groups.");
     await loadData({ force: true });
   }
 
@@ -1308,6 +1443,9 @@ function App() {
     );
 
     setFixtureForm(initialFixtureForm);
+    if (selectedTournament.format === "world_cup" && worldCupWizard.active) {
+      advanceWorldCupWizard(WORLD_CUP_WIZARD_STEPS.DASHBOARD);
+    }
     setMessage("Fixture created.");
     await loadData({ force: true });
   }
@@ -1359,6 +1497,7 @@ function App() {
     }
 
     await createWorldCupKnockoutFromStandings(selectedTournament.id, adminPassword);
+    advanceWorldCupWizard(WORLD_CUP_WIZARD_STEPS.DASHBOARD);
     setMessage("Round of 16 fixtures created from group standings.");
     await loadData({ force: true });
   }
@@ -1426,11 +1565,13 @@ function App() {
           setFixtureForm={setFixtureForm}
           fixtureEditorForms={fixtureEditorForms}
           setFixtureEditorForms={setFixtureEditorForms}
+          worldCupWizard={worldCupWizard}
           resultForms={resultForms}
           setResultForms={setResultForms}
           adminPassword={adminPassword}
           onCreateTournament={handleTournamentSubmit}
           onCreateGroup={handleGroupSubmit}
+          onAdvanceWorldCupWizard={advanceWorldCupWizard}
           onAddTeam={handleTeamSubmit}
           onCreateFixture={handleCreateFixture}
           onGenerateWorldCupKnockout={handleGenerateWorldCupKnockout}
