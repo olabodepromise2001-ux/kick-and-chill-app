@@ -44,6 +44,22 @@ export function createTournament(payload, password) {
   });
 }
 
+export function createGroup(tournamentId, payload, password) {
+  return request(`/tournaments/${tournamentId}/groups`, {
+    method: "POST",
+    headers: getAdminHeaders(password),
+    body: JSON.stringify(payload),
+  });
+}
+
+export function createFixture(tournamentId, payload, password) {
+  return request(`/tournaments/${tournamentId}/fixtures`, {
+    method: "POST",
+    headers: getAdminHeaders(password),
+    body: JSON.stringify(payload),
+  });
+}
+
 export function addTeam(tournamentId, payload, password) {
   return request(`/tournaments/${tournamentId}/teams`, {
     method: "POST",
@@ -53,8 +69,23 @@ export function addTeam(tournamentId, payload, password) {
 }
 
 export function generateFixtures(tournamentId, payload, password) {
-  return request(`/tournaments/${tournamentId}/fixtures`, {
+  return request(`/tournaments/${tournamentId}/fixtures/generate`, {
     method: "POST",
+    headers: getAdminHeaders(password),
+    body: JSON.stringify(payload),
+  });
+}
+
+export function createWorldCupKnockoutFromStandings(tournamentId, password) {
+  return request(`/tournaments/${tournamentId}/world-cup/knockout-from-standings`, {
+    method: "POST",
+    headers: getAdminHeaders(password),
+  });
+}
+
+export function updateFixture(matchId, payload, password) {
+  return request(`/matches/${matchId}/fixture`, {
+    method: "PATCH",
     headers: getAdminHeaders(password),
     body: JSON.stringify(payload),
   });
@@ -65,6 +96,13 @@ export function updateMatch(matchId, payload, password) {
     method: "PATCH",
     headers: getAdminHeaders(password),
     body: JSON.stringify(payload),
+  });
+}
+
+export function deleteFixture(matchId, password) {
+  return request(`/matches/${matchId}`, {
+    method: "DELETE",
+    headers: getAdminHeaders(password),
   });
 }
 

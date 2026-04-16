@@ -1,5 +1,18 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { addTeam, createTournament, fetchBootstrap, generateFixtures, loginAdmin, subscribeToRealtimeUpdates, updateMatch } from "./api.js";
+import {
+  addTeam,
+  createFixture,
+  createGroup,
+  createTournament,
+  createWorldCupKnockoutFromStandings,
+  deleteFixture,
+  fetchBootstrap,
+  generateFixtures,
+  loginAdmin,
+  subscribeToRealtimeUpdates,
+  updateFixture,
+  updateMatch,
+} from "./api.js";
 import logo from "./assets/logo.png";
 
 const PUBLIC_NAV_ITEMS = [
@@ -26,7 +39,20 @@ const initialTournamentForm = {
 const initialTeamForm = {
   name: "",
   players: "",
-  groupName: "",
+  groupId: "",
+};
+
+const initialGroupForm = {
+  name: "",
+};
+
+const initialFixtureForm = {
+  stage: "",
+  phase: "group",
+  groupId: "",
+  homeTeamId: "",
+  awayTeamId: "",
+  scheduledAt: "",
 };
 
 function getStatusTone(status) {
@@ -42,6 +68,32 @@ function formatDate(dateString) {
     dateStyle: "medium",
     timeStyle: "short",
   }).format(new Date(dateString));
+}
+
+function toDateTimeLocalValue(dateString) {
+  if (!dateString) {
+    return "";
+  }
+
+  const date = new Date(dateString);
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  const hours = String(date.getHours()).padStart(2, "0");
+  const minutes = String(date.getMinutes()).padStart(2, "0");
+
+  return `${year}-${month}-${day}T${hours}:${minutes}`;
+}
+
+function createFixtureDraft(match) {
+  return {
+    stage: match.stage,
+    phase: match.phase || "league",
+    groupId: match.groupId || "",
+    homeTeamId: match.homeTeamId,
+    awayTeamId: match.awayTeamId,
+    scheduledAt: toDateTimeLocalValue(match.scheduledAt),
+  };
 }
 
 function formatTournamentFormat(format) {
@@ -84,6 +136,17 @@ function getSelectedTournament(tournaments, selectedTournamentId) {
   return tournaments.find((tournament) => tournament.id === selectedTournamentId) || tournaments[0] || null;
 }
 
+function getAllNotifications(tournaments) {
+  return tournaments
+    .flatMap((tournament) =>
+      (tournament.notifications || []).map((notification) => ({
+        ...notification,
+        tournamentName: tournament.name,
+      })),
+    )
+    .sort((left, right) => new Date(right.createdAt) - new Date(left.createdAt));
+}
+
 function getResultForm(match, resultForms) {
   return resultForms[match.id] || {
     homeScore: match.homeScore,
@@ -121,6 +184,30 @@ function Header({ title, subtitle, actions, children }) {
       </div>
       <p className="hero-copy">{subtitle}</p>
     </header>
+  );
+}
+
+function NotificationBell({ notifications, isOpen, onToggle }) {
+  return (
+    <div className="notification-shell">
+      <button type="button" className="ghost-button" onClick={onToggle}>
+        Bell ({notifications.length})
+      </button>
+      {isOpen ? (
+        <div className="card notification-dropdown">
+          <h3>Notifications</h3>
+          <div className="scorer-list">
+            {notifications.length > 0 ? notifications.slice(0, 10).map((notification) => (
+              <span key={notification.id}>
+                [{notification.tournamentName}] {notification.message}
+              </span>
+            )) : (
+              <span>No notifications yet.</span>
+            )}
+          </div>
+        </div>
+      ) : null}
+    </div>
   );
 }
 
@@ -394,7 +481,7 @@ function TopScorersPanel({ selectedTournament }) {
   );
 }
 
-function PublicApp({ data, selectedTournament, selectedTournamentId, setSelectedTournamentId }) {
+function PublicApp({ data, selectedTournament, selectedTournamentId, setSelectedTournamentId, notifications, isNotificationsOpen, onToggleNotifications }) {
   const [activeTab, setActiveTab] = useState("matches");
   const allMatches = selectedTournament?.matches || [];
   const liveMatches = allMatches.filter((match) => match.status === "live");
@@ -409,6 +496,12 @@ function PublicApp({ data, selectedTournament, selectedTournamentId, setSelected
           ...PUBLIC_NAV_ITEMS.map((item) => (
             <a key={item.label} href={item.href}>{item.label}</a>
           )),
+          <NotificationBell
+            key="notifications"
+            notifications={notifications}
+            isOpen={isNotificationsOpen}
+            onToggle={onToggleNotifications}
+          />,
           <button key="admin-link" type="button" className="ghost-button" onClick={() => navigateTo("/admin/login")}>
             Admin Login
           </button>,
@@ -502,15 +595,29 @@ function AdminDashboard({
   selectedTournament,
   selectedTournamentId,
   setSelectedTournamentId,
+  notifications,
+  isNotificationsOpen,
+  onToggleNotifications,
   tournamentForm,
   setTournamentForm,
+  groupForm,
+  setGroupForm,
   teamForm,
   setTeamForm,
+  fixtureForm,
+  setFixtureForm,
+  fixtureEditorForms,
+  setFixtureEditorForms,
   resultForms,
   setResultForms,
   adminPassword,
   onCreateTournament,
+  onCreateGroup,
   onAddTeam,
+  onCreateFixture,
+  onGenerateWorldCupKnockout,
+  onUpdateFixture,
+  onDeleteFixture,
   onGenerateFixtures,
   onSaveResult,
   onLogout,
@@ -526,6 +633,20 @@ function AdminDashboard({
     }));
   }
 
+  function setFixtureEditorValue(matchId, field, value) {
+    setFixtureEditorForms((current) => ({
+      ...current,
+      [matchId]: {
+        ...(current[matchId] || {}),
+        [field]: value,
+      },
+    }));
+  }
+
+  const fixtureGroupTeams = selectedTournament?.format === "world_cup" && fixtureForm.phase === "group"
+    ? selectedTournament.teams.filter((team) => team.groupId === fixtureForm.groupId)
+    : selectedTournament?.teams || [];
+
   return (
     <>
       <Header
@@ -534,6 +655,12 @@ function AdminDashboard({
         actions={[
           <a key="admin-home" href="#admin-home">Dashboard</a>,
           <a key="admin-results" href="#admin-results">Results</a>,
+          <NotificationBell
+            key="notifications"
+            notifications={notifications}
+            isOpen={isNotificationsOpen}
+            onToggle={onToggleNotifications}
+          />,
           <button key="public-link" type="button" className="ghost-button" onClick={() => navigateTo("/")}>
             Public Site
           </button>,
@@ -616,6 +743,22 @@ function AdminDashboard({
               <button type="submit">Create</button>
             </form>
 
+            {selectedTournament?.format === "world_cup" ? (
+              <form className="card form-card" onSubmit={onCreateGroup}>
+                <h3>Create Group</h3>
+                <input
+                  placeholder="Group letter (A-H)"
+                  maxLength="1"
+                  value={groupForm.name}
+                  onChange={(event) => setGroupForm({ name: event.target.value.toUpperCase() })}
+                  required
+                />
+                <button type="submit" disabled={!selectedTournament}>
+                  Add Group
+                </button>
+              </form>
+            ) : null}
+
             <form className="card form-card" onSubmit={onAddTeam}>
               <h3>Add Team</h3>
               <input
@@ -631,17 +774,26 @@ function AdminDashboard({
                 onChange={(event) => setTeamForm((current) => ({ ...current, players: event.target.value }))}
               />
               {selectedTournament?.format === "world_cup" ? (
-                <input
-                  placeholder="Optional group letter (A-H)"
-                  maxLength="1"
-                  value={teamForm.groupName}
+                <select
+                  value={teamForm.groupId}
                   onChange={(event) => setTeamForm((current) => ({
                     ...current,
-                    groupName: event.target.value.toUpperCase(),
+                    groupId: event.target.value,
                   }))}
-                />
+                  required
+                >
+                  <option value="">Assign to group</option>
+                  {(selectedTournament.groups || []).map((group) => (
+                    <option key={group.id} value={group.id}>
+                      Group {group.name}
+                    </option>
+                  ))}
+                </select>
               ) : null}
-              <button type="submit" disabled={!selectedTournament}>
+              <button
+                type="submit"
+                disabled={!selectedTournament || (selectedTournament?.format === "world_cup" && !(selectedTournament.groups || []).length)}
+              >
                 Add Team
               </button>
             </form>
@@ -650,20 +802,155 @@ function AdminDashboard({
               <h3>Generate Fixtures</h3>
               <p>Create fixtures using the current tournament format for the selected competition.</p>
               {selectedTournament?.format === "world_cup" ? (
-                <p>World Cup mode expects 32 teams and will generate groups first, then auto-build the knockout bracket.</p>
+                <p>World Cup mode is admin-managed. Use the fixture form below, or optionally seed the Round of 16 from completed group standings.</p>
               ) : null}
               <button
                 type="button"
                 onClick={onGenerateFixtures}
                 disabled={
                   !selectedTournament ||
+                  selectedTournament.format === "world_cup" ||
                   selectedTournament.teams.length < 2 ||
                   (selectedTournament.format === "world_cup" && selectedTournament.teams.length !== 32)
                 }
               >
                 Generate Fixtures
               </button>
+              {selectedTournament?.format === "world_cup" ? (
+                <button
+                  type="button"
+                  className="ghost-button"
+                  onClick={onGenerateWorldCupKnockout}
+                  disabled={!selectedTournament}
+                >
+                  Generate Round of 16 From Standings
+                </button>
+              ) : null}
             </div>
+          </div>
+        </section>
+
+        {selectedTournament?.format === "world_cup" ? (
+          <section className="panel">
+            <div className="panel-heading">
+              <div>
+                <p className="eyebrow">World Cup Groups</p>
+                <h2>Groups And Team Assignment</h2>
+              </div>
+            </div>
+
+            <div className="group-standings-grid">
+              {(selectedTournament.groups || []).map((group) => (
+                <article className="card group-card" key={group.id}>
+                  <div className="panel-heading compact-heading">
+                    <div>
+                      <p className="eyebrow">Group</p>
+                      <h3>Group {group.name}</h3>
+                    </div>
+                  </div>
+
+                  <div className="scorer-list">
+                    {selectedTournament.teams.filter((team) => team.groupId === group.id).length > 0 ? (
+                      selectedTournament.teams
+                        .filter((team) => team.groupId === group.id)
+                        .map((team) => (
+                          <span key={team.id}>{team.name}</span>
+                        ))
+                    ) : (
+                      <span>No teams assigned yet.</span>
+                    )}
+                  </div>
+                </article>
+              ))}
+            </div>
+          </section>
+        ) : null}
+
+        <section className="panel">
+          <div className="panel-heading">
+            <div>
+              <p className="eyebrow">Fixture Control</p>
+              <h2>Create And Manage Fixtures</h2>
+            </div>
+          </div>
+
+          <div className="form-grid">
+            <form className="card form-card" onSubmit={onCreateFixture}>
+              <h3>Create Fixture</h3>
+              <select
+                value={fixtureForm.phase}
+                onChange={(event) => setFixtureForm((current) => ({
+                  ...current,
+                  phase: event.target.value,
+                  groupId: event.target.value === "group" ? current.groupId : "",
+                  homeTeamId: "",
+                  awayTeamId: "",
+                }))}
+              >
+                <option value="group">Group</option>
+                <option value="knockout">Knockout</option>
+                <option value="league">League</option>
+              </select>
+              {selectedTournament?.format === "world_cup" ? (
+                <select
+                  value={fixtureForm.groupId}
+                  onChange={(event) => setFixtureForm((current) => ({
+                    ...current,
+                    groupId: event.target.value,
+                    homeTeamId: "",
+                    awayTeamId: "",
+                  }))}
+                  disabled={fixtureForm.phase !== "group"}
+                  required={fixtureForm.phase === "group"}
+                >
+                  <option value="">Select group</option>
+                  {(selectedTournament.groups || []).map((group) => (
+                    <option key={group.id} value={group.id}>
+                      Group {group.name}
+                    </option>
+                  ))}
+                </select>
+              ) : null}
+              <input
+                placeholder={fixtureForm.phase === "knockout" ? "Stage e.g. Quarterfinal" : "Stage name"}
+                value={fixtureForm.stage}
+                onChange={(event) => setFixtureForm((current) => ({ ...current, stage: event.target.value }))}
+                required
+              />
+              <select
+                value={fixtureForm.homeTeamId}
+                onChange={(event) => setFixtureForm((current) => ({ ...current, homeTeamId: event.target.value }))}
+                required
+              >
+                <option value="">Select home team</option>
+                {fixtureGroupTeams.map((team) => (
+                  <option key={team.id} value={team.id}>
+                    {team.name}
+                  </option>
+                ))}
+              </select>
+              <select
+                value={fixtureForm.awayTeamId}
+                onChange={(event) => setFixtureForm((current) => ({ ...current, awayTeamId: event.target.value }))}
+                required
+              >
+                <option value="">Select away team</option>
+                {fixtureGroupTeams.map((team) => (
+                  <option key={team.id} value={team.id}>
+                    {team.name}
+                  </option>
+                ))}
+              </select>
+              <input
+                type="datetime-local"
+                value={fixtureForm.scheduledAt}
+                onChange={(event) => setFixtureForm((current) => ({ ...current, scheduledAt: event.target.value }))}
+                required
+              />
+              <button type="submit" disabled={!selectedTournament}>
+                Create Fixture
+              </button>
+            </form>
           </div>
         </section>
 
@@ -690,6 +977,67 @@ function AdminDashboard({
                   <h3>{homeTeam?.name} vs {awayTeam?.name}</h3>
                   <p className="fixture-score">{match.homeScore} : {match.awayScore}</p>
                   <p>{formatDate(match.scheduledAt)}</p>
+
+                  <div className="result-editor">
+                    <input
+                      value={(fixtureEditorForms[match.id] || createFixtureDraft(match)).stage}
+                      onChange={(event) => setFixtureEditorValue(match.id, "stage", event.target.value)}
+                      placeholder="Stage"
+                    />
+                    <select
+                      value={(fixtureEditorForms[match.id] || createFixtureDraft(match)).phase}
+                      onChange={(event) => setFixtureEditorValue(match.id, "phase", event.target.value)}
+                    >
+                      <option value="group">Group</option>
+                      <option value="knockout">Knockout</option>
+                      <option value="league">League</option>
+                    </select>
+                    {selectedTournament?.format === "world_cup" ? (
+                      <select
+                        value={(fixtureEditorForms[match.id] || createFixtureDraft(match)).groupId}
+                        onChange={(event) => setFixtureEditorValue(match.id, "groupId", event.target.value)}
+                        disabled={(fixtureEditorForms[match.id] || createFixtureDraft(match)).phase !== "group"}
+                      >
+                        <option value="">No group</option>
+                        {(selectedTournament.groups || []).map((group) => (
+                          <option key={group.id} value={group.id}>
+                            Group {group.name}
+                          </option>
+                        ))}
+                      </select>
+                    ) : null}
+                    <select
+                      value={(fixtureEditorForms[match.id] || createFixtureDraft(match)).homeTeamId}
+                      onChange={(event) => setFixtureEditorValue(match.id, "homeTeamId", event.target.value)}
+                    >
+                      {selectedTournament.teams.map((team) => (
+                        <option key={team.id} value={team.id}>
+                          {team.name}
+                        </option>
+                      ))}
+                    </select>
+                    <select
+                      value={(fixtureEditorForms[match.id] || createFixtureDraft(match)).awayTeamId}
+                      onChange={(event) => setFixtureEditorValue(match.id, "awayTeamId", event.target.value)}
+                    >
+                      {selectedTournament.teams.map((team) => (
+                        <option key={team.id} value={team.id}>
+                          {team.name}
+                        </option>
+                      ))}
+                    </select>
+                    <input
+                      type="datetime-local"
+                      value={(fixtureEditorForms[match.id] || createFixtureDraft(match)).scheduledAt}
+                      onChange={(event) => setFixtureEditorValue(match.id, "scheduledAt", event.target.value)}
+                    />
+                    <button type="button" onClick={() => onUpdateFixture(match)}>
+                      Save Fixture
+                    </button>
+                    <button type="button" className="ghost-button" onClick={() => onDeleteFixture(match)}>
+                      Delete Fixture
+                    </button>
+                  </div>
 
                   <div className="player-help">
                     {selectedTournament.teams.flatMap((team) => team.players).map((player) => (
@@ -747,13 +1095,19 @@ function App() {
   const [adminPassword, setAdminPassword] = useState(() => window.localStorage.getItem(ADMIN_PASSWORD_KEY) || "");
   const [loginForm, setLoginForm] = useState({ password: "" });
   const [tournamentForm, setTournamentForm] = useState(initialTournamentForm);
+  const [groupForm, setGroupForm] = useState(initialGroupForm);
   const [teamForm, setTeamForm] = useState(initialTeamForm);
+  const [fixtureForm, setFixtureForm] = useState(initialFixtureForm);
+  const [fixtureEditorForms, setFixtureEditorForms] = useState({});
   const [resultForms, setResultForms] = useState({});
   const [message, setMessage] = useState("");
+  const [toastMessage, setToastMessage] = useState("");
+  const [isNotificationsOpen, setIsNotificationsOpen] = useState(false);
   const [loading, setLoading] = useState(true);
   const refreshTimeoutRef = useRef(null);
   const loadInFlightRef = useRef(false);
   const selectedTournamentIdRef = useRef("");
+  const latestNotificationIdRef = useRef("");
 
   useEffect(() => {
     selectedTournamentIdRef.current = selectedTournamentId;
@@ -777,6 +1131,16 @@ function App() {
 
     try {
       const bootstrap = await fetchBootstrap();
+      const nextNotifications = getAllNotifications(bootstrap.tournaments);
+
+      if (nextNotifications[0] && latestNotificationIdRef.current && nextNotifications[0].id !== latestNotificationIdRef.current) {
+        setToastMessage(nextNotifications[0].message);
+      }
+
+      if (nextNotifications[0]) {
+        latestNotificationIdRef.current = nextNotifications[0].id;
+      }
+
       setData(bootstrap);
 
       if (!selectedTournamentIdRef.current && bootstrap.tournaments[0]) {
@@ -832,10 +1196,25 @@ function App() {
     }
   }, [path, adminPassword]);
 
+  useEffect(() => {
+    if (!toastMessage) {
+      return undefined;
+    }
+
+    const timeoutId = window.setTimeout(() => {
+      setToastMessage("");
+    }, 4000);
+
+    return () => {
+      window.clearTimeout(timeoutId);
+    };
+  }, [toastMessage]);
+
   const selectedTournament = useMemo(
     () => getSelectedTournament(data.tournaments, selectedTournamentId),
     [data.tournaments, selectedTournamentId],
   );
+  const notifications = useMemo(() => getAllNotifications(data.tournaments), [data.tournaments]);
 
   async function handleLogin(event) {
     event.preventDefault();
@@ -861,10 +1240,11 @@ function App() {
 
   async function handleTournamentSubmit(event) {
     event.preventDefault();
-    await createTournament(tournamentForm, adminPassword);
+    const tournament = await createTournament(tournamentForm, adminPassword);
     setTournamentForm(initialTournamentForm);
+    setSelectedTournamentId(tournament.id);
     setMessage("Tournament created.");
-    await loadData();
+    await loadData({ force: true });
   }
 
   async function handleTeamSubmit(event) {
@@ -879,14 +1259,83 @@ function App() {
       {
         name: teamForm.name,
         players: teamForm.players.split(",").map((item) => item.trim()).filter(Boolean),
-        groupName: teamForm.groupName.trim() || null,
+        groupId: teamForm.groupId || null,
       },
       adminPassword,
     );
 
     setTeamForm(initialTeamForm);
     setMessage("Team added.");
-    await loadData();
+    await loadData({ force: true });
+  }
+
+  async function handleGroupSubmit(event) {
+    event.preventDefault();
+
+    if (!selectedTournament) {
+      return;
+    }
+
+    await createGroup(
+      selectedTournament.id,
+      { name: groupForm.name.trim() },
+      adminPassword,
+    );
+
+    setGroupForm(initialGroupForm);
+    setMessage("Group created.");
+    await loadData({ force: true });
+  }
+
+  async function handleCreateFixture(event) {
+    event.preventDefault();
+
+    if (!selectedTournament) {
+      return;
+    }
+
+    await createFixture(
+      selectedTournament.id,
+      {
+        stage: fixtureForm.stage.trim(),
+        phase: fixtureForm.phase,
+        groupId: fixtureForm.phase === "group" ? fixtureForm.groupId || null : null,
+        homeTeamId: fixtureForm.homeTeamId,
+        awayTeamId: fixtureForm.awayTeamId,
+        scheduledAt: new Date(fixtureForm.scheduledAt).toISOString(),
+      },
+      adminPassword,
+    );
+
+    setFixtureForm(initialFixtureForm);
+    setMessage("Fixture created.");
+    await loadData({ force: true });
+  }
+
+  async function handleUpdateFixture(match) {
+    const form = fixtureEditorForms[match.id] || createFixtureDraft(match);
+
+    await updateFixture(
+      match.id,
+      {
+        stage: form.stage.trim(),
+        phase: form.phase,
+        groupId: form.phase === "group" ? form.groupId || null : null,
+        homeTeamId: form.homeTeamId,
+        awayTeamId: form.awayTeamId,
+        scheduledAt: new Date(form.scheduledAt).toISOString(),
+      },
+      adminPassword,
+    );
+
+    setMessage("Fixture updated.");
+    await loadData({ force: true });
+  }
+
+  async function handleDeleteFixture(match) {
+    await deleteFixture(match.id, adminPassword);
+    setMessage("Fixture deleted.");
+    await loadData({ force: true });
   }
 
   async function handleGenerateFixtures() {
@@ -901,7 +1350,17 @@ function App() {
     );
 
     setMessage("Fixtures generated.");
-    await loadData();
+    await loadData({ force: true });
+  }
+
+  async function handleGenerateWorldCupKnockout() {
+    if (!selectedTournament) {
+      return;
+    }
+
+    await createWorldCupKnockoutFromStandings(selectedTournament.id, adminPassword);
+    setMessage("Round of 16 fixtures created from group standings.");
+    await loadData({ force: true });
   }
 
   async function handleResultSubmit(match) {
@@ -919,7 +1378,7 @@ function App() {
     );
 
     setMessage("Match updated.");
-    await loadData();
+    await loadData({ force: true });
   }
 
   const isAdminPath = path === "/admin" || path === "/admin/login";
@@ -930,12 +1389,16 @@ function App() {
 
   return (
     <div className="app-shell">
+      {toastMessage ? <div className="toast">{toastMessage}</div> : null}
       {!isAdminPath ? (
         <PublicApp
           data={data}
           selectedTournament={selectedTournament}
           selectedTournamentId={selectedTournamentId}
           setSelectedTournamentId={setSelectedTournamentId}
+          notifications={notifications}
+          isNotificationsOpen={isNotificationsOpen}
+          onToggleNotifications={() => setIsNotificationsOpen((current) => !current)}
         />
       ) : path === "/admin/login" ? (
         <AdminLoginPage
@@ -950,15 +1413,29 @@ function App() {
           selectedTournament={selectedTournament}
           selectedTournamentId={selectedTournamentId}
           setSelectedTournamentId={setSelectedTournamentId}
+          notifications={notifications}
+          isNotificationsOpen={isNotificationsOpen}
+          onToggleNotifications={() => setIsNotificationsOpen((current) => !current)}
           tournamentForm={tournamentForm}
           setTournamentForm={setTournamentForm}
+          groupForm={groupForm}
+          setGroupForm={setGroupForm}
           teamForm={teamForm}
           setTeamForm={setTeamForm}
+          fixtureForm={fixtureForm}
+          setFixtureForm={setFixtureForm}
+          fixtureEditorForms={fixtureEditorForms}
+          setFixtureEditorForms={setFixtureEditorForms}
           resultForms={resultForms}
           setResultForms={setResultForms}
           adminPassword={adminPassword}
           onCreateTournament={handleTournamentSubmit}
+          onCreateGroup={handleGroupSubmit}
           onAddTeam={handleTeamSubmit}
+          onCreateFixture={handleCreateFixture}
+          onGenerateWorldCupKnockout={handleGenerateWorldCupKnockout}
+          onUpdateFixture={handleUpdateFixture}
+          onDeleteFixture={handleDeleteFixture}
           onGenerateFixtures={handleGenerateFixtures}
           onSaveResult={handleResultSubmit}
           onLogout={handleLogout}

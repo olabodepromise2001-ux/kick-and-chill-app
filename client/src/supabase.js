@@ -30,7 +30,7 @@ export function subscribeToRealtimeUpdates(onChange) {
   }
 
   const channel = supabase.channel("kick-and-chill-live-updates");
-  const tables = ["tournaments", "teams", "players", "matches", "goals"];
+  const tables = ["tournaments", "groups", "teams", "players", "matches", "goals", "notifications"];
 
   for (const table of tables) {
     channel.on(
