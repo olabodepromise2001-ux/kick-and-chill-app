@@ -13,10 +13,12 @@ function createError(message, statusCode = 400) {
 function cloneDemoState() {
   return {
     tournaments: structuredClone(demoData.tournaments),
+    groups: structuredClone(demoData.groups || []),
     teams: structuredClone(demoData.teams),
     players: structuredClone(demoData.players),
     matches: structuredClone(demoData.matches),
     goals: structuredClone(demoData.goals),
+    notifications: structuredClone(demoData.notifications || []),
   };
 }
 
@@ -35,7 +37,16 @@ function normalizeTeam(item) {
     id: item.id,
     tournamentId: item.tournamentId || item.tournament_id,
     name: item.name,
+    groupId: item.groupId || item.group_id || null,
     groupName: item.groupName || item.group_name || null,
+  };
+}
+
+function normalizeGroup(item) {
+  return {
+    id: item.id,
+    tournamentId: item.tournamentId || item.tournament_id,
+    name: item.name,
   };
 }
 
@@ -59,6 +70,7 @@ function normalizeMatch(item) {
     status: item.status,
     scheduledAt: item.scheduledAt || item.scheduled_at,
     phase: item.phase || "league",
+    groupId: item.groupId || item.group_id || null,
     groupName: item.groupName || item.group_name || null,
   };
 }
@@ -70,6 +82,16 @@ function normalizeGoal(item) {
     playerId: item.playerId || item.player_id,
     teamId: item.teamId || item.team_id,
     minute: item.minute,
+  };
+}
+
+function normalizeNotification(item) {
+  return {
+    id: item.id,
+    tournamentId: item.tournamentId || item.tournament_id,
+    type: item.type,
+    message: item.message,
+    createdAt: item.createdAt || item.created_at,
   };
 }
 
@@ -102,11 +124,21 @@ function createLocalRepository() {
       state.tournaments.unshift(tournament);
       return tournament;
     },
+    async createGroup(tournamentId, payload) {
+      const group = {
+        id: `group-${crypto.randomUUID()}`,
+        tournamentId,
+        name: payload.name,
+      };
+      state.groups.push(group);
+      return group;
+    },
     async addTeam(tournamentId, payload) {
       const team = {
         id: `team-${crypto.randomUUID()}`,
         tournamentId,
         name: payload.name,
+        groupId: payload.groupId || null,
         groupName: payload.groupName || null,
       };
       state.teams.push(team);
@@ -124,6 +156,43 @@ function createLocalRepository() {
     async createMatches(matches) {
       state.matches.push(...matches);
       return matches;
+    },
+    async createFixture(payload) {
+      const fixture = {
+        id: `match-${crypto.randomUUID()}`,
+        ...payload,
+      };
+      state.matches.push(fixture);
+      return fixture;
+    },
+    async createNotification(payload) {
+      const notification = {
+        id: `notification-${crypto.randomUUID()}`,
+        tournamentId: payload.tournamentId,
+        type: payload.type,
+        message: payload.message,
+        createdAt: new Date().toISOString(),
+      };
+      state.notifications.unshift(notification);
+      return notification;
+    },
+    async updateFixture(matchId, payload) {
+      const match = state.matches.find((entry) => entry.id === matchId);
+      if (!match) {
+        throw createError("Fixture not found", 404);
+      }
+
+      Object.assign(match, payload);
+      return structuredClone(match);
+    },
+    async deleteFixture(matchId) {
+      const matchIndex = state.matches.findIndex((entry) => entry.id === matchId);
+      if (matchIndex === -1) {
+        throw createError("Fixture not found", 404);
+      }
+
+      state.matches.splice(matchIndex, 1);
+      state.goals = state.goals.filter((goal) => goal.matchId !== matchId);
     },
     async updateMatch(matchId, payload) {
       const match = state.matches.find((entry) => entry.id === matchId);
@@ -152,8 +221,8 @@ function createLocalRepository() {
 }
 
 function createSupabaseRepository() {
-  const supabaseUrl = process.env.SUPABASE_URL;
-  const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+  const supabaseUrl = process.env.SUPABASE_URL?.trim();
+  const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY?.trim();
 
   if (!supabaseUrl || !supabaseKey) {
     return null;
@@ -163,15 +232,17 @@ function createSupabaseRepository() {
 
   return {
     async getAll() {
-      const [tournaments, teams, players, matches, goals] = await Promise.all([
+      const [tournaments, groups, teams, players, matches, goals, notifications] = await Promise.all([
         supabase.from("tournaments").select("*").order("created_at", { ascending: false }),
+        supabase.from("groups").select("*").order("name", { ascending: true }),
         supabase.from("teams").select("*"),
         supabase.from("players").select("*"),
         supabase.from("matches").select("*").order("scheduled_at", { ascending: true }),
         supabase.from("goals").select("*").order("minute", { ascending: true }),
+        supabase.from("notifications").select("*").order("created_at", { ascending: false }),
       ]);
 
-      for (const result of [tournaments, teams, players, matches, goals]) {
+      for (const result of [tournaments, groups, teams, players, matches, goals, notifications]) {
         if (result.error) {
           throw createError(result.error.message, 500);
         }
@@ -179,10 +250,12 @@ function createSupabaseRepository() {
 
       return {
         tournaments: tournaments.data.map(normalizeTournament),
+        groups: groups.data.map(normalizeGroup),
         teams: teams.data.map(normalizeTeam),
         players: players.data.map(normalizePlayer),
         matches: matches.data.map(normalizeMatch),
         goals: goals.data.map(normalizeGoal),
+        notifications: notifications.data.map(normalizeNotification),
       };
     },
     async createTournament(payload) {
@@ -202,12 +275,29 @@ function createSupabaseRepository() {
 
       return normalizeTournament(result.data);
     },
+    async createGroup(tournamentId, payload) {
+      const result = await supabase
+        .from("groups")
+        .insert({
+          tournament_id: tournamentId,
+          name: payload.name,
+        })
+        .select()
+        .single();
+
+      if (result.error) {
+        throw createError(result.error.message, 500);
+      }
+
+      return normalizeGroup(result.data);
+    },
     async addTeam(tournamentId, payload) {
       const teamInsert = await supabase
         .from("teams")
         .insert({
           tournament_id: tournamentId,
           name: payload.name,
+          group_id: payload.groupId || null,
           group_name: payload.groupName || null,
         })
         .select()
@@ -246,6 +336,7 @@ function createSupabaseRepository() {
             status: match.status,
             scheduled_at: match.scheduledAt,
             phase: match.phase || "league",
+            group_id: match.groupId || null,
             group_name: match.groupName || null,
           })),
         )
@@ -256,6 +347,76 @@ function createSupabaseRepository() {
       }
 
       return result.data.map(normalizeMatch);
+    },
+    async createFixture(payload) {
+      const result = await supabase
+        .from("matches")
+        .insert({
+          tournament_id: payload.tournamentId,
+          stage: payload.stage,
+          home_team_id: payload.homeTeamId,
+          away_team_id: payload.awayTeamId,
+          home_score: payload.homeScore,
+          away_score: payload.awayScore,
+          status: payload.status,
+          scheduled_at: payload.scheduledAt,
+          phase: payload.phase || "league",
+          group_id: payload.groupId || null,
+          group_name: payload.groupName || null,
+        })
+        .select()
+        .single();
+
+      if (result.error) {
+        throw createError(result.error.message, 500);
+      }
+
+      return normalizeMatch(result.data);
+    },
+    async createNotification(payload) {
+      const result = await supabase
+        .from("notifications")
+        .insert({
+          tournament_id: payload.tournamentId,
+          type: payload.type,
+          message: payload.message,
+        })
+        .select()
+        .single();
+
+      if (result.error) {
+        throw createError(result.error.message, 500);
+      }
+
+      return normalizeNotification(result.data);
+    },
+    async updateFixture(matchId, payload) {
+      const result = await supabase
+        .from("matches")
+        .update({
+          stage: payload.stage,
+          home_team_id: payload.homeTeamId,
+          away_team_id: payload.awayTeamId,
+          scheduled_at: payload.scheduledAt,
+          phase: payload.phase || "league",
+          group_id: payload.groupId || null,
+          group_name: payload.groupName || null,
+        })
+        .eq("id", matchId)
+        .select()
+        .single();
+
+      if (result.error) {
+        throw createError(result.error.message, 500);
+      }
+
+      return normalizeMatch(result.data);
+    },
+    async deleteFixture(matchId) {
+      const result = await supabase.from("matches").delete().eq("id", matchId);
+      if (result.error) {
+        throw createError(result.error.message, 500);
+      }
     },
     async updateMatch(matchId, payload) {
       const matchUpdate = await supabase
@@ -298,6 +459,28 @@ function createSupabaseRepository() {
   };
 }
 
+function describeFixtureMessage(homeTeamName, awayTeamName, scheduledAt) {
+  return `📅 New fixture: ${homeTeamName} vs ${awayTeamName} scheduled for ${new Date(scheduledAt).toLocaleString("en-NG")}`;
+}
+
+function describeGoalMessage(homeTeamName, awayTeamName, scorers) {
+  const scorerText = scorers.length > 0 ? scorers.join(", ") : "goal recorded";
+  return `⚽ Goal! ${homeTeamName} vs ${awayTeamName} - ${scorerText}`;
+}
+
+async function createFixtureNotifications(repository, fixtures, teams) {
+  for (const fixture of fixtures) {
+    const homeTeam = teams.find((team) => team.id === fixture.homeTeamId);
+    const awayTeam = teams.find((team) => team.id === fixture.awayTeamId);
+
+    await repository.createNotification({
+      tournamentId: fixture.tournamentId,
+      type: "fixture",
+      message: describeFixtureMessage(homeTeam?.name || "Home Team", awayTeam?.name || "Away Team", fixture.scheduledAt),
+    });
+  }
+}
+
 function createMatch(tournamentId, stage, homeTeamId, awayTeamId, offset, extras = {}) {
   return {
     id: `match-${crypto.randomUUID()}`,
@@ -310,6 +493,7 @@ function createMatch(tournamentId, stage, homeTeamId, awayTeamId, offset, extras
     status: "upcoming",
     scheduledAt: new Date(Date.now() + offset * 3600000).toISOString(),
     phase: extras.phase || "league",
+    groupId: extras.groupId || null,
     groupName: extras.groupName || null,
   };
 }
@@ -355,58 +539,36 @@ function buildKnockoutMatches(tournamentId, teams) {
   return fixtures;
 }
 
-function getWorldCupGroupMap(teams) {
-  const explicitGroups = teams.filter((team) => team.groupName);
+function getWorldCupGroups(tournamentId, groups, teams) {
+  const tournamentGroups = groups
+    .filter((group) => group.tournamentId === tournamentId)
+    .sort((left, right) => left.name.localeCompare(right.name));
 
-  if (explicitGroups.length === teams.length) {
-    return explicitGroups.reduce((accumulator, team) => {
-      const key = team.groupName.toUpperCase();
-      if (!accumulator[key]) {
-        accumulator[key] = [];
-      }
-      accumulator[key].push(team);
-      return accumulator;
-    }, {});
-  }
-
-  const orderedTeams = [...teams].sort((left, right) => left.name.localeCompare(right.name));
-  const groupSize = 4;
-  const groups = {};
-
-  orderedTeams.forEach((team, index) => {
-    const groupLetter = WORLD_CUP_GROUP_LETTERS[Math.floor(index / groupSize)];
-    if (!groups[groupLetter]) {
-      groups[groupLetter] = [];
-    }
-
-    groups[groupLetter].push({
-      ...team,
-      groupName: groupLetter,
-    });
-  });
-
-  return groups;
+  return tournamentGroups.map((group) => ({
+    ...group,
+    teams: teams.filter((team) => team.groupId === group.id),
+  }));
 }
 
-function buildWorldCupGroupMatches(tournamentId, teams) {
+function buildWorldCupGroupMatches(tournamentId, groups) {
   const fixtures = [];
-  const groupMap = getWorldCupGroupMap(teams);
   let offset = 0;
 
-  for (const groupLetter of Object.keys(groupMap).sort()) {
-    const groupTeams = groupMap[groupLetter];
+  for (const group of groups) {
+    const groupTeams = group.teams;
 
     for (let first = 0; first < groupTeams.length; first += 1) {
       for (let second = first + 1; second < groupTeams.length; second += 1) {
         fixtures.push(createMatch(
           tournamentId,
-          `Group ${groupLetter}`,
+          `Group ${group.name}`,
           groupTeams[first].id,
           groupTeams[second].id,
           offset,
           {
             phase: "group",
-            groupName: groupLetter,
+            groupId: group.id,
+            groupName: group.name,
           },
         ));
         offset += 1;
@@ -417,28 +579,22 @@ function buildWorldCupGroupMatches(tournamentId, teams) {
   return fixtures;
 }
 
-function validateWorldCupGroupMap(groupMap) {
-  const groupLetters = Object.keys(groupMap).sort();
-
-  if (groupLetters.length !== WORLD_CUP_GROUP_LETTERS.length) {
+function validateWorldCupGroups(groups) {
+  if (groups.length !== WORLD_CUP_GROUP_LETTERS.length) {
     throw createError("World Cup format requires groups A to H");
   }
 
-  for (const expectedGroup of WORLD_CUP_GROUP_LETTERS) {
-    if (!groupMap[expectedGroup] || groupMap[expectedGroup].length !== 4) {
+  for (let index = 0; index < WORLD_CUP_GROUP_LETTERS.length; index += 1) {
+    const expectedGroup = WORLD_CUP_GROUP_LETTERS[index];
+    const group = groups[index];
+    if (!group || group.name.toUpperCase() !== expectedGroup || group.teams.length !== 4) {
       throw createError("Each World Cup group must contain exactly 4 teams");
     }
   }
 }
 
-function getWorldCupTeamGroup(team, groupMap) {
-  for (const [groupLetter, groupTeams] of Object.entries(groupMap)) {
-    if (groupTeams.some((groupTeam) => groupTeam.id === team.id)) {
-      return groupLetter;
-    }
-  }
-
-  return null;
+function getWorldCupTeamGroup(team, groups) {
+  return groups.find((group) => group.id === team.groupId)?.name || null;
 }
 
 function calculateTableRows(teams, matches) {
@@ -498,22 +654,19 @@ function calculateTableRows(teams, matches) {
     );
 }
 
-function calculateStandings(tournament, teams, matches) {
+function calculateStandings(tournament, groups, teams, matches) {
   const tournamentTeams = teams.filter((team) => team.tournamentId === tournament.id);
   const tournamentMatches = matches.filter((match) => match.tournamentId === tournament.id);
 
   if (tournament.format === "world_cup") {
-    const groupMap = getWorldCupGroupMap(tournamentTeams);
-
-    return Object.keys(groupMap)
-      .sort()
-      .map((groupLetter) => ({
-        groupName: groupLetter,
-        rows: calculateTableRows(
-          groupMap[groupLetter],
-          tournamentMatches.filter((match) => match.phase === "group" && match.groupName === groupLetter),
-        ),
-      }));
+    return getWorldCupGroups(tournament.id, groups, tournamentTeams).map((group) => ({
+      groupId: group.id,
+      groupName: group.name,
+      rows: calculateTableRows(
+        group.teams,
+        tournamentMatches.filter((match) => match.phase === "group" && match.groupId === group.id),
+      ),
+    }));
   }
 
   return calculateTableRows(
@@ -559,7 +712,7 @@ function getWinningTeamId(match) {
 }
 
 function buildWorldCupRoundOf16(tournamentId, standings, existingMatchesCount) {
-  const groupedStandings = Object.fromEntries(standings.map((group) => [group.groupName, group.rows]));
+  const groupedStandings = Object.fromEntries(standings.map((group) => [group.groupName.toUpperCase(), group.rows]));
   const requiredGroups = WORLD_CUP_GROUP_LETTERS;
 
   for (const groupLetter of requiredGroups) {
@@ -586,98 +739,87 @@ function buildWorldCupRoundOf16(tournamentId, standings, existingMatchesCount) {
       home.teamId,
       away.teamId,
       existingMatchesCount + index,
-      { phase: "knockout" },
+      { phase: "knockout", groupId: null, groupName: null },
     ));
 }
 
-function buildNextKnockoutRound(tournamentId, matches, currentStage, nextStage) {
-  const stageMatches = matches
-    .filter((match) => match.stage === currentStage)
-    .sort((left, right) => new Date(left.scheduledAt) - new Date(right.scheduledAt));
+function createFixtureRecord(tournament, groups, teams, payload) {
+  const homeTeam = teams.find((team) => team.id === payload.homeTeamId);
+  const awayTeam = teams.find((team) => team.id === payload.awayTeamId);
 
-  if (stageMatches.length === 0 || !stageMatches.every(hasDecisiveWinner)) {
-    return [];
+  if (!homeTeam || !awayTeam) {
+    throw createError("Home and away teams must belong to the selected tournament");
   }
 
-  const winnerIds = stageMatches.map(getWinningTeamId);
-
-  if (winnerIds.some((winnerId) => !winnerId)) {
-    return [];
+  if (homeTeam.id === awayTeam.id) {
+    throw createError("Home and away teams must be different");
   }
 
-  const fixtures = [];
-  for (let index = 0; index < winnerIds.length; index += 2) {
-    fixtures.push(createMatch(
-      tournamentId,
-      nextStage,
-      winnerIds[index],
-      winnerIds[index + 1],
-      matches.length + fixtures.length,
-      { phase: "knockout" },
-    ));
+  const selectedGroup = payload.groupId
+    ? groups.find((group) => group.id === payload.groupId && group.tournamentId === tournament.id)
+    : null;
+
+  if (payload.groupId && !selectedGroup) {
+    throw createError("Selected group was not found for this tournament");
   }
 
-  return fixtures;
-}
-
-function determineWorldCupAutoFixtures(tournament, teams, matches) {
-  const tournamentMatches = matches.filter((match) => match.tournamentId === tournament.id);
-  const knockoutMatches = tournamentMatches.filter((match) => match.phase === "knockout");
-  const groupMatches = tournamentMatches.filter((match) => match.phase === "group");
-
-  if (groupMatches.length > 0 && knockoutMatches.length === 0) {
-    if (!groupMatches.every((match) => match.status === "finished")) {
-      return [];
+  if (tournament.format === "world_cup" && payload.phase === "group") {
+    if (!selectedGroup) {
+      throw createError("World Cup group fixtures must belong to a group");
     }
 
-    const groupStandings = calculateStandings(tournament, teams, matches);
-    return buildWorldCupRoundOf16(tournament.id, groupStandings, tournamentMatches.length);
-  }
-
-  for (let index = 0; index < WORLD_CUP_KNOCKOUT_ORDER.length - 1; index += 1) {
-    const currentStage = WORLD_CUP_KNOCKOUT_ORDER[index];
-    const nextStage = WORLD_CUP_KNOCKOUT_ORDER[index + 1];
-    const existingNextStage = knockoutMatches.filter((match) => match.stage === nextStage);
-
-    if (existingNextStage.length > 0) {
-      continue;
-    }
-
-    const nextFixtures = buildNextKnockoutRound(tournament.id, tournamentMatches, currentStage, nextStage);
-
-    if (nextFixtures.length > 0) {
-      return nextFixtures;
+    if (homeTeam.groupId !== selectedGroup.id || awayTeam.groupId !== selectedGroup.id) {
+      throw createError("Group fixtures must use teams from the selected group");
     }
   }
 
-  return [];
+  return {
+    tournamentId: tournament.id,
+    stage: payload.stage || (payload.phase === "knockout" ? "Knockout" : "Group Match"),
+    homeTeamId: payload.homeTeamId,
+    awayTeamId: payload.awayTeamId,
+    homeScore: payload.homeScore ?? 0,
+    awayScore: payload.awayScore ?? 0,
+    status: payload.status || "upcoming",
+    scheduledAt: payload.scheduledAt || new Date().toISOString(),
+    phase: payload.phase || "league",
+    groupId: selectedGroup?.id || null,
+    groupName: selectedGroup?.name || null,
+  };
 }
 
 export function createTournamentService() {
   const repository = createSupabaseRepository() || createLocalRepository();
+  const storageMode = repository ? (process.env.SUPABASE_URL?.trim() && process.env.SUPABASE_SERVICE_ROLE_KEY?.trim() ? "supabase" : "fallback") : "fallback";
 
   return {
+    getStorageMode() {
+      return storageMode;
+    },
     async getBootstrapData() {
       // Bootstrap returns a denormalized shape so the frontend can stay very small.
       const data = await repository.getAll();
       const goalsByMatch = groupBy(data.goals, (goal) => goal.matchId);
       const playersByTeam = groupBy(data.players, (player) => player.teamId);
+      const groupsByTournament = groupBy(data.groups || [], (group) => group.tournamentId);
+      const notificationsByTournament = groupBy(data.notifications || [], (notification) => notification.tournamentId);
       const teamsByTournament = groupBy(data.teams, (team) => team.tournamentId);
       const matchesByTournament = groupBy(data.matches, (match) => match.tournamentId);
 
       return {
         tournaments: data.tournaments.map((tournament) => {
+          const tournamentGroups = groupsByTournament[tournament.id] || [];
           const tournamentTeams = teamsByTournament[tournament.id] || [];
           const tournamentMatches = matchesByTournament[tournament.id] || [];
-          const standings = calculateStandings(tournament, data.teams, data.matches);
-          const worldCupGroupMap = tournament.format === "world_cup" ? getWorldCupGroupMap(tournamentTeams) : null;
+          const standings = calculateStandings(tournament, data.groups || [], data.teams, data.matches);
 
           return {
             ...tournament,
+            groups: tournamentGroups,
             teams: tournamentTeams.map((team) => ({
               ...team,
               groupName: tournament.format === "world_cup"
-                ? getWorldCupTeamGroup(team, worldCupGroupMap || {})
+                ? getWorldCupTeamGroup(team, tournamentGroups)
                 : team.groupName,
               players: playersByTeam[team.id] || [],
             })),
@@ -685,6 +827,7 @@ export function createTournamentService() {
               ...match,
               goals: goalsByMatch[match.id] || [],
             })),
+            notifications: notificationsByTournament[tournament.id] || [],
             standings: tournament.format === "world_cup" ? [] : standings,
             groupStandings: tournament.format === "world_cup" ? standings : [],
             topScorers: calculateTopScorers(tournament.id, data.teams, data.players, data.goals),
@@ -699,16 +842,115 @@ export function createTournamentService() {
 
       return repository.createTournament(payload);
     },
+    async createGroup(tournamentId, payload) {
+      const data = await repository.getAll();
+      const tournament = data.tournaments.find((entry) => entry.id === tournamentId);
+
+      if (!tournament) {
+        throw createError("Tournament not found", 404);
+      }
+
+      if (tournament.format !== "world_cup") {
+        throw createError("Groups are only available for World Cup tournaments");
+      }
+
+      if (!payload.name) {
+        throw createError("Group name is required");
+      }
+
+      const existingGroups = (data.groups || [])
+        .filter((group) => group.tournamentId === tournamentId)
+        .map((group) => group.name.toUpperCase());
+
+      const groupName = payload.name.trim().toUpperCase();
+
+      if (!WORLD_CUP_GROUP_LETTERS.includes(groupName)) {
+        throw createError("World Cup groups must be named A to H");
+      }
+
+      if (existingGroups.includes(groupName)) {
+        throw createError("Group already exists");
+      }
+
+      return repository.createGroup(tournamentId, { name: groupName });
+    },
     async addTeam(tournamentId, payload) {
+      const data = await repository.getAll();
+      const tournament = data.tournaments.find((entry) => entry.id === tournamentId);
+
+      if (!tournament) {
+        throw createError("Tournament not found", 404);
+      }
+
       if (!payload.name) {
         throw createError("Team name is required");
       }
 
+      if (tournament.format === "world_cup") {
+        if (!payload.groupId) {
+          throw createError("World Cup teams must belong to a group");
+        }
+
+        const group = (data.groups || []).find((entry) => entry.id === payload.groupId && entry.tournamentId === tournamentId);
+
+        if (!group) {
+          throw createError("Selected group was not found for this tournament");
+        }
+      }
+
       return repository.addTeam(tournamentId, payload);
+    },
+    async createFixture(tournamentId, payload) {
+      const data = await repository.getAll();
+      const tournament = data.tournaments.find((entry) => entry.id === tournamentId);
+      const groups = (data.groups || []).filter((group) => group.tournamentId === tournamentId);
+      const teams = data.teams.filter((team) => team.tournamentId === tournamentId);
+
+      if (!tournament) {
+        throw createError("Tournament not found", 404);
+      }
+
+      const fixture = createFixtureRecord(tournament, groups, teams, payload);
+      const createdFixture = await repository.createFixture(fixture);
+      await createFixtureNotifications(repository, [createdFixture], teams);
+      return createdFixture;
+    },
+    async updateFixture(matchId, payload) {
+      const data = await repository.getAll();
+      const existingMatch = data.matches.find((entry) => entry.id === matchId);
+
+      if (!existingMatch) {
+        throw createError("Fixture not found", 404);
+      }
+
+      const tournament = data.tournaments.find((entry) => entry.id === existingMatch.tournamentId);
+      const groups = (data.groups || []).filter((group) => group.tournamentId === existingMatch.tournamentId);
+      const teams = data.teams.filter((team) => team.tournamentId === existingMatch.tournamentId);
+
+      if (!tournament) {
+        throw createError("Tournament not found", 404);
+      }
+
+      const fixture = createFixtureRecord(tournament, groups, teams, {
+        ...existingMatch,
+        ...payload,
+        homeScore: existingMatch.homeScore,
+        awayScore: existingMatch.awayScore,
+        status: existingMatch.status,
+      });
+
+      const updatedFixture = await repository.updateFixture(matchId, fixture);
+      await createFixtureNotifications(repository, [updatedFixture], teams);
+      return updatedFixture;
+    },
+    async deleteFixture(matchId) {
+      await repository.deleteFixture(matchId);
+      return { success: true };
     },
     async generateFixtures(tournamentId, payload) {
       const data = await repository.getAll();
       const tournament = data.tournaments.find((entry) => entry.id === tournamentId);
+      const groups = (data.groups || []).filter((group) => group.tournamentId === tournamentId);
       const teams = data.teams.filter((team) => team.tournamentId === tournamentId);
       const existingMatches = data.matches.filter((match) => match.tournamentId === tournamentId);
 
@@ -733,16 +975,52 @@ export function createTournamentService() {
       }
 
       if (payload.format === "world_cup") {
-        validateWorldCupGroupMap(getWorldCupGroupMap(teams));
+        throw createError("World Cup fixtures are admin-managed. Create fixtures manually instead.");
       }
 
       const fixtures = payload.format === "knockout"
         ? buildKnockoutMatches(tournamentId, teams)
-        : payload.format === "world_cup"
-          ? buildWorldCupGroupMatches(tournamentId, teams)
-          : buildRoundRobinMatches(tournamentId, teams);
+        : buildRoundRobinMatches(tournamentId, teams);
 
-      return repository.createMatches(fixtures);
+      const createdFixtures = await repository.createMatches(fixtures);
+      await createFixtureNotifications(repository, createdFixtures, teams);
+      return createdFixtures;
+    },
+    async createWorldCupKnockoutFromStandings(tournamentId) {
+      const data = await repository.getAll();
+      const tournament = data.tournaments.find((entry) => entry.id === tournamentId);
+
+      if (!tournament) {
+        throw createError("Tournament not found", 404);
+      }
+
+      if (tournament.format !== "world_cup") {
+        throw createError("This helper is only available for World Cup tournaments");
+      }
+
+      const tournamentMatches = data.matches.filter((match) => match.tournamentId === tournamentId);
+      const existingKnockout = tournamentMatches.filter((match) => match.phase === "knockout");
+
+      if (existingKnockout.length > 0) {
+        throw createError("Knockout fixtures already exist for this tournament");
+      }
+
+      const groupStandings = calculateStandings(tournament, data.groups || [], data.teams, data.matches);
+
+      if (groupStandings.some((group) => group.rows.length < 2)) {
+        throw createError("Each group must have at least two teams");
+      }
+
+      const groupFixtures = tournamentMatches.filter((match) => match.phase === "group");
+      if (groupFixtures.length === 0 || !groupFixtures.every((match) => match.status === "finished")) {
+        throw createError("Finish all group fixtures before generating knockout fixtures from standings");
+      }
+
+      const fixtures = buildWorldCupRoundOf16(tournamentId, groupStandings, tournamentMatches.length);
+      const createdFixtures = await repository.createMatches(fixtures);
+      const teams = data.teams.filter((team) => team.tournamentId === tournamentId);
+      await createFixtureNotifications(repository, createdFixtures, teams);
+      return createdFixtures;
     },
     async updateMatchResult(matchId, payload) {
       if (payload.homeScore === undefined || payload.awayScore === undefined || !payload.status) {
@@ -761,19 +1039,22 @@ export function createTournamentService() {
       }
 
       const updatedMatch = await repository.updateMatch(matchId, payload);
-      const data = await repository.getAll();
-      const tournament = data.tournaments.find((entry) => entry.id === updatedMatch.tournamentId);
+      const tournament = existingData.tournaments.find((entry) => entry.id === existingMatch.tournamentId);
+      const teams = existingData.teams.filter((team) => team.tournamentId === existingMatch.tournamentId);
+      const players = existingData.players;
+      const homeTeam = teams.find((team) => team.id === existingMatch.homeTeamId);
+      const awayTeam = teams.find((team) => team.id === existingMatch.awayTeamId);
+      const scorerNames = (payload.goals || []).map((goal) => {
+        const player = players.find((entry) => entry.id === goal.playerId);
+        return player ? `${player.name} ${goal.minute}'` : `Unknown ${goal.minute}'`;
+      });
 
-      if (!tournament) {
-        return updatedMatch;
-      }
-
-      if (tournament.format === "world_cup") {
-        const autoFixtures = determineWorldCupAutoFixtures(tournament, data.teams, data.matches);
-
-        if (autoFixtures.length > 0) {
-          await repository.createMatches(autoFixtures);
-        }
+      if (tournament && (payload.goals || []).length > 0) {
+        await repository.createNotification({
+          tournamentId: tournament.id,
+          type: "goal",
+          message: describeGoalMessage(homeTeam?.name || "Home Team", awayTeam?.name || "Away Team", scorerNames),
+        });
       }
 
       return updatedMatch;

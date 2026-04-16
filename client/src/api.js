@@ -1,4 +1,20 @@
-const API_BASE_URL = (import.meta.env.VITE_API_BASE_URL || "/api").replace(/\/$/, "");
+function getApiBaseUrl() {
+  const configuredBaseUrl = import.meta.env.VITE_API_BASE_URL;
+
+  if (configuredBaseUrl) {
+    return configuredBaseUrl.replace(/\/$/, "");
+  }
+
+  const { protocol, hostname, port } = window.location;
+
+  if (port === "4000") {
+    return "/api";
+  }
+
+  return `${protocol}//${hostname}:4000/api`;
+}
+
+const API_BASE_URL = getApiBaseUrl();
 
 async function request(path, options = {}) {
   const headers = {
@@ -12,8 +28,11 @@ async function request(path, options = {}) {
   });
 
   if (!response.ok) {
-    const error = await response.json().catch(() => ({ message: "Request failed" }));
-    throw new Error(error.message || "Request failed");
+    const error = await response.json().catch(async () => {
+      const text = await response.text().catch(() => "");
+      return { message: text || `Request failed (${response.status})` };
+    });
+    throw new Error(error.message || `Request failed (${response.status})`);
   }
 
   return response.json();

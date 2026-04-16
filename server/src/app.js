@@ -21,9 +21,16 @@ export function createApp() {
 
   app.use(cors());
   app.use(express.json());
+  app.use((_request, response, next) => {
+    response.setHeader("x-storage-mode", service.getStorageMode());
+    next();
+  });
 
   app.get("/health", (_request, response) => {
-    response.json({ status: "ok" });
+    response.json({
+      status: "ok",
+      storageMode: service.getStorageMode(),
+    });
   });
 
   app.get("/api/bootstrap", async (_request, response) => {
@@ -48,19 +55,44 @@ export function createApp() {
     response.status(201).json(tournament);
   });
 
+  app.post("/api/tournaments/:tournamentId/groups", requireAdmin, async (request, response) => {
+    const group = await service.createGroup(request.params.tournamentId, request.body);
+    response.status(201).json(group);
+  });
+
+  app.post("/api/tournaments/:tournamentId/fixtures", requireAdmin, async (request, response) => {
+    const fixture = await service.createFixture(request.params.tournamentId, request.body);
+    response.status(201).json(fixture);
+  });
+
   app.post("/api/tournaments/:tournamentId/teams", requireAdmin, async (request, response) => {
     const team = await service.addTeam(request.params.tournamentId, request.body);
     response.status(201).json(team);
   });
 
-  app.post("/api/tournaments/:tournamentId/fixtures", requireAdmin, async (request, response) => {
+  app.post("/api/tournaments/:tournamentId/fixtures/generate", requireAdmin, async (request, response) => {
     const fixtures = await service.generateFixtures(request.params.tournamentId, request.body);
     response.status(201).json(fixtures);
+  });
+
+  app.post("/api/tournaments/:tournamentId/world-cup/knockout-from-standings", requireAdmin, async (request, response) => {
+    const fixtures = await service.createWorldCupKnockoutFromStandings(request.params.tournamentId);
+    response.status(201).json(fixtures);
+  });
+
+  app.patch("/api/matches/:matchId/fixture", requireAdmin, async (request, response) => {
+    const fixture = await service.updateFixture(request.params.matchId, request.body);
+    response.json(fixture);
   });
 
   app.patch("/api/matches/:matchId", requireAdmin, async (request, response) => {
     const match = await service.updateMatchResult(request.params.matchId, request.body);
     response.json(match);
+  });
+
+  app.delete("/api/matches/:matchId", requireAdmin, async (request, response) => {
+    const result = await service.deleteFixture(request.params.matchId);
+    response.json(result);
   });
 
   app.use((error, _request, response, _next) => {

@@ -15,6 +15,12 @@ create table if not exists teams (
   group_name text
 );
 
+create table if not exists groups (
+  id uuid primary key default gen_random_uuid(),
+  tournament_id uuid not null references tournaments(id) on delete cascade,
+  name text not null
+);
+
 create table if not exists players (
   id uuid primary key default gen_random_uuid(),
   team_id uuid not null references teams(id) on delete cascade,
@@ -32,6 +38,7 @@ create table if not exists matches (
   status text not null check (status in ('upcoming', 'live', 'finished')),
   scheduled_at timestamptz not null default now(),
   phase text not null default 'league',
+  group_id uuid references groups(id) on delete set null,
   group_name text
 );
 
@@ -41,7 +48,9 @@ alter table tournaments
   check (format in ('round_robin', 'knockout', 'world_cup'));
 
 alter table teams add column if not exists group_name text;
+alter table teams add column if not exists group_id uuid references groups(id) on delete set null;
 alter table matches add column if not exists phase text not null default 'league';
+alter table matches add column if not exists group_id uuid references groups(id) on delete set null;
 alter table matches add column if not exists group_name text;
 
 create table if not exists goals (
@@ -50,4 +59,12 @@ create table if not exists goals (
   player_id uuid not null references players(id) on delete cascade,
   team_id uuid not null references teams(id) on delete cascade,
   minute integer not null default 0
+);
+
+create table if not exists notifications (
+  id uuid primary key default gen_random_uuid(),
+  tournament_id uuid not null references tournaments(id) on delete cascade,
+  type text not null check (type in ('goal', 'fixture')),
+  message text not null,
+  created_at timestamptz not null default now()
 );
