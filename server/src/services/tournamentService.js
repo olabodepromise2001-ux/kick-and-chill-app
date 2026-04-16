@@ -1,6 +1,9 @@
 import { createClient } from "@supabase/supabase-js";
 import { demoData } from "../data/demoData.js";
 
+const WORLD_CUP_GROUP_LETTERS = ["A", "B", "C", "D", "E", "F", "G", "H"];
+const WORLD_CUP_KNOCKOUT_ORDER = ["Round of 16", "Quarterfinal", "Semifinal", "Final"];
+
 function createError(message, statusCode = 400) {
   const error = new Error(message);
   error.statusCode = statusCode;
@@ -32,6 +35,7 @@ function normalizeTeam(item) {
     id: item.id,
     tournamentId: item.tournamentId || item.tournament_id,
     name: item.name,
+    groupName: item.groupName || item.group_name || null,
   };
 }
 
@@ -54,6 +58,8 @@ function normalizeMatch(item) {
     awayScore: item.awayScore ?? item.away_score ?? 0,
     status: item.status,
     scheduledAt: item.scheduledAt || item.scheduled_at,
+    phase: item.phase || "league",
+    groupName: item.groupName || item.group_name || null,
   };
 }
 
@@ -101,6 +107,7 @@ function createLocalRepository() {
         id: `team-${crypto.randomUUID()}`,
         tournamentId,
         name: payload.name,
+        groupName: payload.groupName || null,
       };
       state.teams.push(team);
 
@@ -201,6 +208,7 @@ function createSupabaseRepository() {
         .insert({
           tournament_id: tournamentId,
           name: payload.name,
+          group_name: payload.groupName || null,
         })
         .select()
         .single();
@@ -237,6 +245,8 @@ function createSupabaseRepository() {
             away_score: match.awayScore,
             status: match.status,
             scheduled_at: match.scheduledAt,
+            phase: match.phase || "league",
+            group_name: match.groupName || null,
           })),
         )
         .select();
@@ -288,23 +298,36 @@ function createSupabaseRepository() {
   };
 }
 
+function createMatch(tournamentId, stage, homeTeamId, awayTeamId, offset, extras = {}) {
+  return {
+    id: `match-${crypto.randomUUID()}`,
+    tournamentId,
+    stage,
+    homeTeamId,
+    awayTeamId,
+    homeScore: 0,
+    awayScore: 0,
+    status: "upcoming",
+    scheduledAt: new Date(Date.now() + offset * 3600000).toISOString(),
+    phase: extras.phase || "league",
+    groupName: extras.groupName || null,
+  };
+}
+
 function buildRoundRobinMatches(tournamentId, teams) {
   const fixtures = [];
   let round = 1;
 
   for (let first = 0; first < teams.length; first += 1) {
     for (let second = first + 1; second < teams.length; second += 1) {
-      fixtures.push({
-        id: `match-${crypto.randomUUID()}`,
+      fixtures.push(createMatch(
         tournamentId,
-        stage: `Matchday ${round}`,
-        homeTeamId: teams[first].id,
-        awayTeamId: teams[second].id,
-        homeScore: 0,
-        awayScore: 0,
-        status: "upcoming",
-        scheduledAt: new Date(Date.now() + fixtures.length * 3600000).toISOString(),
-      });
+        `Matchday ${round}`,
+        teams[first].id,
+        teams[second].id,
+        fixtures.length,
+        { phase: "league" },
+      ));
 
       round = round === teams.length - 1 ? 1 : round + 1;
     }
@@ -319,42 +342,122 @@ function buildKnockoutMatches(tournamentId, teams) {
   const stage = stages[teams.length] || "Knockout";
 
   for (let index = 0; index < teams.length; index += 2) {
-    fixtures.push({
-      id: `match-${crypto.randomUUID()}`,
+    fixtures.push(createMatch(
       tournamentId,
       stage,
-      homeTeamId: teams[index].id,
-      awayTeamId: teams[index + 1].id,
-      homeScore: 0,
-      awayScore: 0,
-      status: "upcoming",
-      scheduledAt: new Date(Date.now() + fixtures.length * 3600000).toISOString(),
-    });
+      teams[index].id,
+      teams[index + 1].id,
+      fixtures.length,
+      { phase: "knockout" },
+    ));
   }
 
   return fixtures;
 }
 
-function calculateStandings(tournamentId, teams, matches) {
-  // The same standings helper powers both demo mode and Supabase-backed mode.
-  const table = teams
-    .filter((team) => team.tournamentId === tournamentId)
-    .map((team) => ({
-      teamId: team.id,
-      teamName: team.name,
-      played: 0,
-      won: 0,
-      drawn: 0,
-      lost: 0,
-      goalsFor: 0,
-      goalsAgainst: 0,
-      goalDifference: 0,
-      points: 0,
-    }));
+function getWorldCupGroupMap(teams) {
+  const explicitGroups = teams.filter((team) => team.groupName);
+
+  if (explicitGroups.length === teams.length) {
+    return explicitGroups.reduce((accumulator, team) => {
+      const key = team.groupName.toUpperCase();
+      if (!accumulator[key]) {
+        accumulator[key] = [];
+      }
+      accumulator[key].push(team);
+      return accumulator;
+    }, {});
+  }
+
+  const orderedTeams = [...teams].sort((left, right) => left.name.localeCompare(right.name));
+  const groupSize = 4;
+  const groups = {};
+
+  orderedTeams.forEach((team, index) => {
+    const groupLetter = WORLD_CUP_GROUP_LETTERS[Math.floor(index / groupSize)];
+    if (!groups[groupLetter]) {
+      groups[groupLetter] = [];
+    }
+
+    groups[groupLetter].push({
+      ...team,
+      groupName: groupLetter,
+    });
+  });
+
+  return groups;
+}
+
+function buildWorldCupGroupMatches(tournamentId, teams) {
+  const fixtures = [];
+  const groupMap = getWorldCupGroupMap(teams);
+  let offset = 0;
+
+  for (const groupLetter of Object.keys(groupMap).sort()) {
+    const groupTeams = groupMap[groupLetter];
+
+    for (let first = 0; first < groupTeams.length; first += 1) {
+      for (let second = first + 1; second < groupTeams.length; second += 1) {
+        fixtures.push(createMatch(
+          tournamentId,
+          `Group ${groupLetter}`,
+          groupTeams[first].id,
+          groupTeams[second].id,
+          offset,
+          {
+            phase: "group",
+            groupName: groupLetter,
+          },
+        ));
+        offset += 1;
+      }
+    }
+  }
+
+  return fixtures;
+}
+
+function validateWorldCupGroupMap(groupMap) {
+  const groupLetters = Object.keys(groupMap).sort();
+
+  if (groupLetters.length !== WORLD_CUP_GROUP_LETTERS.length) {
+    throw createError("World Cup format requires groups A to H");
+  }
+
+  for (const expectedGroup of WORLD_CUP_GROUP_LETTERS) {
+    if (!groupMap[expectedGroup] || groupMap[expectedGroup].length !== 4) {
+      throw createError("Each World Cup group must contain exactly 4 teams");
+    }
+  }
+}
+
+function getWorldCupTeamGroup(team, groupMap) {
+  for (const [groupLetter, groupTeams] of Object.entries(groupMap)) {
+    if (groupTeams.some((groupTeam) => groupTeam.id === team.id)) {
+      return groupLetter;
+    }
+  }
+
+  return null;
+}
+
+function calculateTableRows(teams, matches) {
+  const table = teams.map((team) => ({
+    teamId: team.id,
+    teamName: team.name,
+    played: 0,
+    won: 0,
+    drawn: 0,
+    lost: 0,
+    goalsFor: 0,
+    goalsAgainst: 0,
+    goalDifference: 0,
+    points: 0,
+  }));
 
   const rowMap = Object.fromEntries(table.map((row) => [row.teamId, row]));
 
-  for (const match of matches.filter((entry) => entry.tournamentId === tournamentId && entry.status !== "upcoming")) {
+  for (const match of matches.filter((entry) => entry.status !== "upcoming")) {
     const home = rowMap[match.homeTeamId];
     const away = rowMap[match.awayTeamId];
 
@@ -395,6 +498,30 @@ function calculateStandings(tournamentId, teams, matches) {
     );
 }
 
+function calculateStandings(tournament, teams, matches) {
+  const tournamentTeams = teams.filter((team) => team.tournamentId === tournament.id);
+  const tournamentMatches = matches.filter((match) => match.tournamentId === tournament.id);
+
+  if (tournament.format === "world_cup") {
+    const groupMap = getWorldCupGroupMap(tournamentTeams);
+
+    return Object.keys(groupMap)
+      .sort()
+      .map((groupLetter) => ({
+        groupName: groupLetter,
+        rows: calculateTableRows(
+          groupMap[groupLetter],
+          tournamentMatches.filter((match) => match.phase === "group" && match.groupName === groupLetter),
+        ),
+      }));
+  }
+
+  return calculateTableRows(
+    tournamentTeams,
+    tournamentMatches.filter((match) => match.phase !== "knockout"),
+  );
+}
+
 function calculateTopScorers(tournamentId, teams, players, goals) {
   const teamIds = new Set(teams.filter((team) => team.tournamentId === tournamentId).map((team) => team.id));
   const playerMap = Object.fromEntries(players.map((player) => [player.id, player]));
@@ -419,6 +546,113 @@ function calculateTopScorers(tournamentId, teams, players, goals) {
     .sort((left, right) => right.goals - left.goals || left.playerName.localeCompare(right.playerName));
 }
 
+function hasDecisiveWinner(match) {
+  return match.status === "finished" && match.homeScore !== match.awayScore;
+}
+
+function getWinningTeamId(match) {
+  if (!hasDecisiveWinner(match)) {
+    return null;
+  }
+
+  return match.homeScore > match.awayScore ? match.homeTeamId : match.awayTeamId;
+}
+
+function buildWorldCupRoundOf16(tournamentId, standings, existingMatchesCount) {
+  const groupedStandings = Object.fromEntries(standings.map((group) => [group.groupName, group.rows]));
+  const requiredGroups = WORLD_CUP_GROUP_LETTERS;
+
+  for (const groupLetter of requiredGroups) {
+    if (!groupedStandings[groupLetter] || groupedStandings[groupLetter].length < 2) {
+      return [];
+    }
+  }
+
+  const pairings = [
+    [groupedStandings.A[0], groupedStandings.B[1]],
+    [groupedStandings.C[0], groupedStandings.D[1]],
+    [groupedStandings.E[0], groupedStandings.F[1]],
+    [groupedStandings.G[0], groupedStandings.H[1]],
+    [groupedStandings.B[0], groupedStandings.A[1]],
+    [groupedStandings.D[0], groupedStandings.C[1]],
+    [groupedStandings.F[0], groupedStandings.E[1]],
+    [groupedStandings.H[0], groupedStandings.G[1]],
+  ];
+
+  return pairings.map(([home, away], index) =>
+    createMatch(
+      tournamentId,
+      "Round of 16",
+      home.teamId,
+      away.teamId,
+      existingMatchesCount + index,
+      { phase: "knockout" },
+    ));
+}
+
+function buildNextKnockoutRound(tournamentId, matches, currentStage, nextStage) {
+  const stageMatches = matches
+    .filter((match) => match.stage === currentStage)
+    .sort((left, right) => new Date(left.scheduledAt) - new Date(right.scheduledAt));
+
+  if (stageMatches.length === 0 || !stageMatches.every(hasDecisiveWinner)) {
+    return [];
+  }
+
+  const winnerIds = stageMatches.map(getWinningTeamId);
+
+  if (winnerIds.some((winnerId) => !winnerId)) {
+    return [];
+  }
+
+  const fixtures = [];
+  for (let index = 0; index < winnerIds.length; index += 2) {
+    fixtures.push(createMatch(
+      tournamentId,
+      nextStage,
+      winnerIds[index],
+      winnerIds[index + 1],
+      matches.length + fixtures.length,
+      { phase: "knockout" },
+    ));
+  }
+
+  return fixtures;
+}
+
+function determineWorldCupAutoFixtures(tournament, teams, matches) {
+  const tournamentMatches = matches.filter((match) => match.tournamentId === tournament.id);
+  const knockoutMatches = tournamentMatches.filter((match) => match.phase === "knockout");
+  const groupMatches = tournamentMatches.filter((match) => match.phase === "group");
+
+  if (groupMatches.length > 0 && knockoutMatches.length === 0) {
+    if (!groupMatches.every((match) => match.status === "finished")) {
+      return [];
+    }
+
+    const groupStandings = calculateStandings(tournament, teams, matches);
+    return buildWorldCupRoundOf16(tournament.id, groupStandings, tournamentMatches.length);
+  }
+
+  for (let index = 0; index < WORLD_CUP_KNOCKOUT_ORDER.length - 1; index += 1) {
+    const currentStage = WORLD_CUP_KNOCKOUT_ORDER[index];
+    const nextStage = WORLD_CUP_KNOCKOUT_ORDER[index + 1];
+    const existingNextStage = knockoutMatches.filter((match) => match.stage === nextStage);
+
+    if (existingNextStage.length > 0) {
+      continue;
+    }
+
+    const nextFixtures = buildNextKnockoutRound(tournament.id, tournamentMatches, currentStage, nextStage);
+
+    if (nextFixtures.length > 0) {
+      return nextFixtures;
+    }
+  }
+
+  return [];
+}
+
 export function createTournamentService() {
   const repository = createSupabaseRepository() || createLocalRepository();
 
@@ -432,19 +666,30 @@ export function createTournamentService() {
       const matchesByTournament = groupBy(data.matches, (match) => match.tournamentId);
 
       return {
-        tournaments: data.tournaments.map((tournament) => ({
-          ...tournament,
-          teams: (teamsByTournament[tournament.id] || []).map((team) => ({
-            ...team,
-            players: playersByTeam[team.id] || [],
-          })),
-          matches: (matchesByTournament[tournament.id] || []).map((match) => ({
-            ...match,
-            goals: goalsByMatch[match.id] || [],
-          })),
-          standings: calculateStandings(tournament.id, data.teams, data.matches),
-          topScorers: calculateTopScorers(tournament.id, data.teams, data.players, data.goals),
-        })),
+        tournaments: data.tournaments.map((tournament) => {
+          const tournamentTeams = teamsByTournament[tournament.id] || [];
+          const tournamentMatches = matchesByTournament[tournament.id] || [];
+          const standings = calculateStandings(tournament, data.teams, data.matches);
+          const worldCupGroupMap = tournament.format === "world_cup" ? getWorldCupGroupMap(tournamentTeams) : null;
+
+          return {
+            ...tournament,
+            teams: tournamentTeams.map((team) => ({
+              ...team,
+              groupName: tournament.format === "world_cup"
+                ? getWorldCupTeamGroup(team, worldCupGroupMap || {})
+                : team.groupName,
+              players: playersByTeam[team.id] || [],
+            })),
+            matches: tournamentMatches.map((match) => ({
+              ...match,
+              goals: goalsByMatch[match.id] || [],
+            })),
+            standings: tournament.format === "world_cup" ? [] : standings,
+            groupStandings: tournament.format === "world_cup" ? standings : [],
+            topScorers: calculateTopScorers(tournament.id, data.teams, data.players, data.goals),
+          };
+        }),
       };
     },
     async createTournament(payload) {
@@ -463,7 +708,17 @@ export function createTournamentService() {
     },
     async generateFixtures(tournamentId, payload) {
       const data = await repository.getAll();
+      const tournament = data.tournaments.find((entry) => entry.id === tournamentId);
       const teams = data.teams.filter((team) => team.tournamentId === tournamentId);
+      const existingMatches = data.matches.filter((match) => match.tournamentId === tournamentId);
+
+      if (!tournament) {
+        throw createError("Tournament not found", 404);
+      }
+
+      if (existingMatches.length > 0) {
+        throw createError("Fixtures already exist for this tournament");
+      }
 
       if (teams.length < 2) {
         throw createError("At least two teams are required to generate fixtures");
@@ -473,9 +728,19 @@ export function createTournamentService() {
         throw createError("Knockout format requires an even number of teams");
       }
 
+      if (payload.format === "world_cup" && teams.length !== 32) {
+        throw createError("World Cup format requires exactly 32 teams");
+      }
+
+      if (payload.format === "world_cup") {
+        validateWorldCupGroupMap(getWorldCupGroupMap(teams));
+      }
+
       const fixtures = payload.format === "knockout"
         ? buildKnockoutMatches(tournamentId, teams)
-        : buildRoundRobinMatches(tournamentId, teams);
+        : payload.format === "world_cup"
+          ? buildWorldCupGroupMatches(tournamentId, teams)
+          : buildRoundRobinMatches(tournamentId, teams);
 
       return repository.createMatches(fixtures);
     },
@@ -484,7 +749,34 @@ export function createTournamentService() {
         throw createError("homeScore, awayScore and status are required");
       }
 
-      return repository.updateMatch(matchId, payload);
+      const existingData = await repository.getAll();
+      const existingMatch = existingData.matches.find((entry) => entry.id === matchId);
+
+      if (!existingMatch) {
+        throw createError("Match not found", 404);
+      }
+
+      if (existingMatch.phase === "knockout" && payload.status === "finished" && payload.homeScore === payload.awayScore) {
+        throw createError("Knockout matches must have a winner");
+      }
+
+      const updatedMatch = await repository.updateMatch(matchId, payload);
+      const data = await repository.getAll();
+      const tournament = data.tournaments.find((entry) => entry.id === updatedMatch.tournamentId);
+
+      if (!tournament) {
+        return updatedMatch;
+      }
+
+      if (tournament.format === "world_cup") {
+        const autoFixtures = determineWorldCupAutoFixtures(tournament, data.teams, data.matches);
+
+        if (autoFixtures.length > 0) {
+          await repository.createMatches(autoFixtures);
+        }
+      }
+
+      return updatedMatch;
     },
   };
 }
